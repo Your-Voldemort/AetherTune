@@ -5,6 +5,185 @@ use crate::storage::config::{Config, KeyBindings};
 use crate::storage::favorites::FavoritesStore;
 use crate::storage::history::HistoryStore;
 
+use std::time::Duration;
+use tokio::time::timeout;
+use tokio::sync::oneshot;
+
+/// Maximum time to wait for any single RadioBrowser API call.
+const API_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Describes what kind of fetch completed, so the main loop can apply it.
+pub enum FetchResult {
+    /// Replace the station list entirely (startup, category switch, search)
+    Replace {
+        stations: Vec<radiobrowser::ApiStation>,
+        query: QueryKind,
+        message: String,
+    },
+    /// Append to the current station list (load more)
+    Append {
+        stations: Vec<radiobrowser::ApiStation>,
+    },
+    /// The fetch failed
+    Error(String),
+}
+
+// ─── Free-standing fetch functions (no &self — can be tokio::spawn'd) ────
+
+/// Fetch blended global+local stations by tag.
+async fn fetch_blended_by_tag(
+    tag: String,
+    country_code: String,
+) -> Result<Vec<radiobrowser::ApiStation>, String> {
+    let client = timeout(API_TIMEOUT, radiobrowser::RadioBrowserAPI::new())
+        .await
+        .map_err(|_| "RadioBrowser API timed out (DNS discovery)".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let mut global = timeout(API_TIMEOUT, client.get_stations()
+        .tag(&tag)
+        .order(radiobrowser::StationOrder::Votes)
+        .reverse(true)
+        .hidebroken(true)
+        .limit("175")
+        .send())
+        .await
+        .map_err(|_| "RadioBrowser API timed out (station fetch)".to_string())?
+        .map_err(|e| e.to_string())?;
+    filter_spam(&mut global);
+
+    if country_code.is_empty() {
+        return Ok(global);
+    }
+
+    // Local fetch — if it fails, just return global results
+    let local_result: Result<Vec<radiobrowser::ApiStation>, String> = async {
+        let client2 = timeout(API_TIMEOUT, radiobrowser::RadioBrowserAPI::new())
+            .await
+            .map_err(|_| "timed out".to_string())?
+            .map_err(|e| e.to_string())?;
+        let mut local = timeout(API_TIMEOUT, client2.get_stations()
+            .tag(&tag)
+            .countrycode(&country_code)
+            .order(radiobrowser::StationOrder::Votes)
+            .reverse(true)
+            .hidebroken(true)
+            .limit("75")
+            .send())
+            .await
+            .map_err(|_| "timed out".to_string())?
+            .map_err(|e| e.to_string())?;
+        filter_spam(&mut local);
+        Ok(local)
+    }.await;
+
+    match local_result {
+        Ok(local) => Ok(App::interleave_static(global, local)),
+        Err(_) => Ok(global),
+    }
+}
+
+/// Fetch blended global+local stations by name search.
+async fn fetch_blended_by_name(
+    name: String,
+    country_code: String,
+) -> Result<Vec<radiobrowser::ApiStation>, String> {
+    let client = timeout(API_TIMEOUT, radiobrowser::RadioBrowserAPI::new())
+        .await
+        .map_err(|_| "RadioBrowser API timed out (DNS discovery)".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let mut global = timeout(API_TIMEOUT, client.get_stations()
+        .name(&name)
+        .order(radiobrowser::StationOrder::Votes)
+        .reverse(true)
+        .hidebroken(true)
+        .limit("175")
+        .send())
+        .await
+        .map_err(|_| "RadioBrowser API timed out (station fetch)".to_string())?
+        .map_err(|e| e.to_string())?;
+    filter_spam(&mut global);
+
+    if country_code.is_empty() {
+        return Ok(global);
+    }
+
+    let local_result: Result<Vec<radiobrowser::ApiStation>, String> = async {
+        let client2 = timeout(API_TIMEOUT, radiobrowser::RadioBrowserAPI::new())
+            .await
+            .map_err(|_| "timed out".to_string())?
+            .map_err(|e| e.to_string())?;
+        let mut local = timeout(API_TIMEOUT, client2.get_stations()
+            .name(&name)
+            .countrycode(&country_code)
+            .order(radiobrowser::StationOrder::Votes)
+            .reverse(true)
+            .hidebroken(true)
+            .limit("75")
+            .send())
+            .await
+            .map_err(|_| "timed out".to_string())?
+            .map_err(|e| e.to_string())?;
+        filter_spam(&mut local);
+        Ok(local)
+    }.await;
+
+    match local_result {
+        Ok(local) => Ok(App::interleave_static(global, local)),
+        Err(_) => Ok(global),
+    }
+}
+
+/// Fetch additional stations for pagination (load more).
+async fn fetch_more(
+    query: QueryKind,
+    offset: String,
+    limit: String,
+) -> Result<Vec<radiobrowser::ApiStation>, String> {
+    let client = timeout(API_TIMEOUT, radiobrowser::RadioBrowserAPI::new())
+        .await
+        .map_err(|_| "RadioBrowser API timed out (DNS discovery)".to_string())?
+        .map_err(|e| e.to_string())?;
+
+    let mut stations = match &query {
+        QueryKind::Tag(tag) => {
+            timeout(API_TIMEOUT, client.get_stations()
+                .tag(tag)
+                .order(radiobrowser::StationOrder::Votes)
+                .reverse(true)
+                .hidebroken(true)
+                .offset(offset)
+                .limit(limit)
+                .send())
+                .await
+                .map_err(|_| "RadioBrowser API timed out (station fetch)".to_string())?
+                .map_err(|e| e.to_string())?
+        }
+        QueryKind::Search(name) => {
+            timeout(API_TIMEOUT, client.get_stations()
+                .name(name)
+                .order(radiobrowser::StationOrder::Votes)
+                .reverse(true)
+                .hidebroken(true)
+                .offset(offset)
+                .limit(limit)
+                .send())
+                .await
+                .map_err(|_| "RadioBrowser API timed out (station fetch)".to_string())?
+                .map_err(|e| e.to_string())?
+        }
+    };
+    filter_spam(&mut stations);
+    Ok(stations)
+}
+
+/// Filter out spam stations — anything with an absurdly high vote count
+/// is almost certainly botted. Shortwave uses 50K as their threshold.
+fn filter_spam(stations: &mut Vec<radiobrowser::ApiStation>) {
+    stations.retain(|s| s.votes < 50_000);
+}
+
 #[derive(PartialEq, Clone)]
 pub enum InputMode {
     Normal,
@@ -234,6 +413,10 @@ pub struct App {
     /// When true, the settings overlay is waiting for a keypress to rebind
     /// The tuple is (action_index, is_alt_slot)
     pub settings_awaiting_key: Option<(usize, bool)>,
+    /// True while a background RadioBrowser fetch is in flight
+    pub is_loading: bool,
+    /// Receiver for the result of a background fetch (checked each tick)
+    pub pending_fetch: Option<oneshot::Receiver<FetchResult>>,
 }
 
 #[derive(Clone)]
@@ -317,6 +500,8 @@ impl App {
             keybindings: config.keybindings,
             settings_selected: 0,
             settings_awaiting_key: None,
+            is_loading: false,
+            pending_fetch: None,
         }
     }
 
@@ -362,20 +547,16 @@ impl App {
         }
     }
 
-    pub async fn switch_category(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn switch_category(&mut self) {
+        if self.is_loading { return; }
         self.category_index = (self.category_index + 1) % self.categories.len();
         let genre = self.categories[self.category_index];
         let tag = genre.to_lowercase();
-
-        self.stations = self.fetch_blended_by_tag(&tag).await?;
-        self.has_more = self.stations.len() as u32 >= self.page_size;
-        self.last_query = QueryKind::Tag(tag);
-        self.selected_index = 0;
-        self.status_message = Some(format!("Loaded {} stations for '{}'", self.stations.len(), genre));
-        Ok(())
+        self.start_tag_fetch(tag, genre.to_string());
     }
 
-    pub async fn switch_category_back(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn switch_category_back(&mut self) {
+        if self.is_loading { return; }
         if self.category_index == 0 {
             self.category_index = self.categories.len() - 1;
         } else {
@@ -383,13 +564,33 @@ impl App {
         }
         let genre = self.categories[self.category_index];
         let tag = genre.to_lowercase();
+        self.start_tag_fetch(tag, genre.to_string());
+    }
 
-        self.stations = self.fetch_blended_by_tag(&tag).await?;
-        self.has_more = self.stations.len() as u32 >= self.page_size;
-        self.last_query = QueryKind::Tag(tag);
-        self.selected_index = 0;
-        self.status_message = Some(format!("Loaded {} stations for '{}'", self.stations.len(), genre));
-        Ok(())
+    /// Spawn a background fetch for stations by tag and stash the receiver.
+    fn start_tag_fetch(&mut self, tag: String, genre: String) {
+        self.is_loading = true;
+        self.status_message = Some(format!("Loading '{}'...", genre));
+        let country_code = self.country_code.clone();
+        let query_tag = tag.clone();
+
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = fetch_blended_by_tag(tag, country_code).await;
+            let fetch_result = match result {
+                Ok(stations) => {
+                    let msg = format!("Loaded {} stations for '{}'", stations.len(), genre);
+                    FetchResult::Replace {
+                        stations,
+                        query: QueryKind::Tag(query_tag),
+                        message: msg,
+                    }
+                }
+                Err(e) => FetchResult::Error(format!("⚠ Failed to load '{}': {}", genre, e)),
+            };
+            let _ = tx.send(fetch_result);
+        });
+        self.pending_fetch = Some(rx);
     }
 
     pub fn play(&mut self) {
@@ -517,73 +718,58 @@ impl App {
         self.favorites.entries.iter().any(|f| f.url == url)
     }
 
-    pub async fn perform_search(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let stations = self.fetch_blended_by_name(&self.search_query.clone()).await?;
+    pub fn perform_search(&mut self) {
+        if self.is_loading { return; }
+        let query = self.search_query.clone();
+        if query.is_empty() { return; }
 
-        let count = stations.len();
-        self.has_more = count as u32 >= self.page_size;
-        self.last_query = QueryKind::Search(self.search_query.clone());
-        self.stations = stations;
-        self.selected_index = 0;
-        self.active_panel = ActivePanel::Stations;
-        self.status_message = Some(format!("Found {} stations for '{}'", count, self.search_query));
-        Ok(())
+        self.is_loading = true;
+        self.status_message = Some(format!("Searching '{}'...", query));
+        let country_code = self.country_code.clone();
+        let search_query = query.clone();
+
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = fetch_blended_by_name(query, country_code).await;
+            let fetch_result = match result {
+                Ok(stations) => {
+                    let msg = format!("Found {} stations for '{}'", stations.len(), search_query);
+                    FetchResult::Replace {
+                        stations,
+                        query: QueryKind::Search(search_query),
+                        message: msg,
+                    }
+                }
+                Err(e) => FetchResult::Error(format!("⚠ Search failed: {}", e)),
+            };
+            let _ = tx.send(fetch_result);
+        });
+        self.pending_fetch = Some(rx);
     }
 
-    pub async fn load_more(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn load_more(&mut self) {
+        if self.is_loading { return; }
         if !self.has_more {
             self.status_message = Some("No more stations to load".to_string());
-            return Ok(());
+            return;
         }
 
+        self.is_loading = true;
+        self.status_message = Some("Loading more stations...".to_string());
         let offset = self.stations.len().to_string();
         let limit = self.page_size.to_string();
-        let client = radiobrowser::RadioBrowserAPI::new().await?;
+        let query = self.last_query.clone();
 
-        let mut new_stations = match &self.last_query {
-            QueryKind::Tag(tag) => {
-                client.get_stations()
-                    .tag(tag)
-                    .order(radiobrowser::StationOrder::Votes)
-                    .reverse(true)
-                    .hidebroken(true)
-                    .offset(offset)
-                    .limit(limit)
-                    .send().await?
-            }
-            QueryKind::Search(query) => {
-                client.get_stations()
-                    .name(query)
-                    .order(radiobrowser::StationOrder::Votes)
-                    .reverse(true)
-                    .hidebroken(true)
-                    .offset(offset)
-                    .limit(limit)
-                    .send().await?
-            }
-        };
-        Self::filter_spam(&mut new_stations);
-
-        let fetched = new_stations.len();
-        self.has_more = fetched as u32 >= self.page_size;
-
-        // Filter out duplicates by URL
-        let existing_urls: std::collections::HashSet<String> =
-            self.stations.iter().map(|s| s.url.clone()).collect();
-        let mut added = 0;
-        for station in new_stations {
-            if !existing_urls.contains(&station.url) {
-                self.stations.push(station);
-                added += 1;
-            }
-        }
-
-        self.status_message = Some(format!(
-            "Loaded {} more stations (total: {})",
-            added,
-            self.stations.len()
-        ));
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = fetch_more(query, offset, limit).await;
+            let fetch_result = match result {
+                Ok(stations) => FetchResult::Append { stations },
+                Err(e) => FetchResult::Error(format!("⚠ Failed to load more: {}", e)),
+            };
+            let _ = tx.send(fetch_result);
+        });
+        self.pending_fetch = Some(rx);
     }
 
     pub fn cycle_panel(&mut self) {
@@ -592,6 +778,93 @@ impl App {
             ActivePanel::Favorites => ActivePanel::History,
             ActivePanel::History => ActivePanel::Stations,
         };
+    }
+
+    /// Check if a background fetch has completed and apply the result.
+    /// Call this every tick from the main loop.
+    pub fn poll_fetch(&mut self) {
+        let rx = match self.pending_fetch.as_mut() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        // Non-blocking check — try_recv returns Ok if ready, Err if not yet
+        match rx.try_recv() {
+            Ok(result) => {
+                self.pending_fetch = None;
+                self.is_loading = false;
+                match result {
+                    FetchResult::Replace { stations, query, message } => {
+                        self.has_more = stations.len() as u32 >= self.page_size;
+                        self.stations = stations;
+                        self.last_query = query;
+                        self.selected_index = 0;
+                        self.active_panel = ActivePanel::Stations;
+                        self.status_message = Some(message);
+                    }
+                    FetchResult::Append { mut stations } => {
+                        let fetched = stations.len();
+                        self.has_more = fetched as u32 >= self.page_size;
+
+                        // Filter out duplicates by URL
+                        let existing_urls: std::collections::HashSet<String> =
+                            self.stations.iter().map(|s| s.url.clone()).collect();
+                        let mut added = 0;
+                        for station in stations.drain(..) {
+                            if !existing_urls.contains(&station.url) {
+                                self.stations.push(station);
+                                added += 1;
+                            }
+                        }
+                        self.status_message = Some(format!(
+                            "Loaded {} more stations (total: {})",
+                            added,
+                            self.stations.len()
+                        ));
+                    }
+                    FetchResult::Error(msg) => {
+                        self.status_message = Some(msg);
+                    }
+                }
+            }
+            Err(oneshot::error::TryRecvError::Empty) => {
+                // Still in flight — do nothing
+            }
+            Err(oneshot::error::TryRecvError::Closed) => {
+                // Sender dropped (task panicked?) — clean up
+                self.pending_fetch = None;
+                self.is_loading = false;
+                self.status_message = Some("⚠ Station fetch was interrupted".to_string());
+            }
+        }
+    }
+
+    /// Kick off the initial station fetch (called from main after App is constructed).
+    /// The app starts immediately with an empty station list; stations arrive via poll_fetch.
+    pub fn start_initial_fetch(&mut self) {
+        self.is_loading = true;
+        self.status_message = Some("Connecting to RadioBrowser...".to_string());
+        let country_code = self.country_code.clone();
+
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = fetch_blended_by_tag("lo-fi".to_string(), country_code).await;
+            let fetch_result = match result {
+                Ok(stations) => {
+                    let msg = format!("Loaded {} stations", stations.len());
+                    FetchResult::Replace {
+                        stations,
+                        query: QueryKind::Tag("lo-fi".to_string()),
+                        message: msg,
+                    }
+                }
+                Err(e) => FetchResult::Error(
+                    format!("⚠ Could not load stations: {}. Try searching or switching genres.", e)
+                ),
+            };
+            let _ = tx.send(fetch_result);
+        });
+        self.pending_fetch = Some(rx);
     }
 
     /// Check if the media title changed and log it.
@@ -661,78 +934,6 @@ impl App {
         }
 
         false
-    }
-
-    /// Filter out spam stations — anything with an absurdly high vote count
-    /// is almost certainly botted. Shortwave uses 50K as their threshold.
-    fn filter_spam(stations: &mut Vec<radiobrowser::ApiStation>) {
-        stations.retain(|s| s.votes < 50_000);
-    }
-
-    /// Fetch stations with blended local/global results when a country code is set.
-    /// Returns ~70% global stations interleaved with ~30% local stations.
-    /// If no country code is configured, returns pure global results.
-    async fn fetch_blended_by_tag(&self, tag: &str) -> Result<Vec<radiobrowser::ApiStation>, Box<dyn std::error::Error>> {
-        let client = radiobrowser::RadioBrowserAPI::new().await?;
-
-        // Global fetch
-        let mut global = client.get_stations()
-            .tag(tag)
-            .order(radiobrowser::StationOrder::Votes)
-            .reverse(true)
-            .hidebroken(true)
-            .limit("175")
-            .send().await?;
-        Self::filter_spam(&mut global);
-
-        if self.country_code.is_empty() {
-            return Ok(global);
-        }
-
-        // Local fetch — same tag, filtered by country
-        let client2 = radiobrowser::RadioBrowserAPI::new().await?;
-        let mut local = client2.get_stations()
-            .tag(tag)
-            .countrycode(&self.country_code)
-            .order(radiobrowser::StationOrder::Votes)
-            .reverse(true)
-            .hidebroken(true)
-            .limit("75")
-            .send().await?;
-        Self::filter_spam(&mut local);
-
-        Ok(Self::interleave(global, local))
-    }
-
-    /// Fetch stations with blended local/global results for a name search.
-    async fn fetch_blended_by_name(&self, name: &str) -> Result<Vec<radiobrowser::ApiStation>, Box<dyn std::error::Error>> {
-        let client = radiobrowser::RadioBrowserAPI::new().await?;
-
-        let mut global = client.get_stations()
-            .name(name)
-            .order(radiobrowser::StationOrder::Votes)
-            .reverse(true)
-            .hidebroken(true)
-            .limit("175")
-            .send().await?;
-        Self::filter_spam(&mut global);
-
-        if self.country_code.is_empty() {
-            return Ok(global);
-        }
-
-        let client2 = radiobrowser::RadioBrowserAPI::new().await?;
-        let mut local = client2.get_stations()
-            .name(name)
-            .countrycode(&self.country_code)
-            .order(radiobrowser::StationOrder::Votes)
-            .reverse(true)
-            .hidebroken(true)
-            .limit("75")
-            .send().await?;
-        Self::filter_spam(&mut local);
-
-        Ok(Self::interleave(global, local))
     }
 
     /// Interleave local stations into a global list, roughly every 3rd-4th position.

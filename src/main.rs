@@ -67,43 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Load config to check for country code
-    let init_config = storage::config::Config::load();
-    let country_code = init_config.country_code.clone();
-
-    // Fetch initial stations — global pool sorted by popularity
-    let client = radiobrowser::RadioBrowserAPI::new().await?;
-    let mut global = client
-        .get_stations()
-        .tag("lo-fi")
-        .order(radiobrowser::StationOrder::Votes)
-        .reverse(true)
-        .hidebroken(true)
-        .limit("175")
-        .send()
-        .await?;
-    global.retain(|s| s.votes < 50_000);
-
-    // Blend in local stations if country code is configured
-    let stations_data = if !country_code.is_empty() {
-        let client2 = radiobrowser::RadioBrowserAPI::new().await?;
-        let mut local = client2
-            .get_stations()
-            .tag("lo-fi")
-            .countrycode(&country_code)
-            .order(radiobrowser::StationOrder::Votes)
-            .reverse(true)
-            .hidebroken(true)
-            .limit("75")
-            .send()
-            .await?;
-        local.retain(|s| s.votes < 50_000);
-        app::App::interleave_static(global, local)
-    } else {
-        global
-    };
-
-    let mut app = app::App::new(stations_data);
+    // Construct the app immediately with an empty station list.
+    // The initial fetch runs in the background — stations appear once it completes.
+    let mut app = app::App::new(Vec::new());
+    app.start_initial_fetch();
 
     let mut last_tick = Instant::now();
 
@@ -268,18 +235,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.play();
                         } else if app.keybindings.cycle_panel.matches(kc) {
                             if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                app.switch_category().await?;
+                                app.switch_category();
                             } else {
                                 app.cycle_panel();
                             }
                         } else if kc == KeyCode::BackTab {
-                            app.switch_category_back().await?;
+                            app.switch_category_back();
                         } else if app.keybindings.genre_prev.matches(kc) {
-                            app.switch_category_back().await?;
+                            app.switch_category_back();
                         } else if app.keybindings.genre_next.matches(kc) {
-                            app.switch_category().await?;
+                            app.switch_category();
                         } else if app.keybindings.load_more.matches(kc) {
-                            app.load_more().await?;
+                            app.load_more();
                         } else if app.keybindings.perf_toggle.matches(kc) {
                             app.show_perf = !app.show_perf;
                         } else if app.show_perf && app.keybindings.perf_tick_slower.matches(kc) {
@@ -293,7 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     InputMode::Editing => match key.code {
                         KeyCode::Enter => {
                             app.input_mode = InputMode::Normal;
-                            app.perform_search().await?;
+                            app.perform_search();
                         }
                         KeyCode::Esc => {
                             app.input_mode = InputMode::Normal;
@@ -321,6 +288,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let poll_start = Instant::now();
             app.player.poll();
             app.check_song_change();
+
+            // Check if a background station fetch has completed
+            app.poll_fetch();
+
             poll_us = poll_start.elapsed().as_micros() as u64;
 
             let vis_start = Instant::now();
