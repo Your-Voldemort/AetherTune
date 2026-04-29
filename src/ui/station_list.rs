@@ -39,7 +39,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 })
                 .collect();
             (
-                if app.has_more {
+                if app.is_loading {
+                    " Stations ⏳ Loading... ".to_string()
+                } else if app.has_more {
                     format!(" Stations ({}+) [n: more] ", app.stations.len())
                 } else {
                     format!(" Stations ({}) ", app.stations.len())
