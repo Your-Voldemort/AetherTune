@@ -92,23 +92,69 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Section header
     lines.push(section_header("Per-frame work (all frames)"));
     lines.push(column_header());
-    lines.push(timing_line("Draw", avg.draw_us, max.draw_us));
-    lines.push(timing_line("Key input", avg.event_handle_us, max.event_handle_us));
+    lines.push(timing_line("Draw", avg.draw_us, max.draw_us, false));
+    lines.push(timing_line("Key input", avg.event_handle_us, max.event_handle_us, false));
     lines.push(Line::from(""));
 
     // Tick-only section
     lines.push(section_header("Tick work (tick frames only)"));
     lines.push(column_header());
-    lines.push(timing_line("IPC poll", summary.tick_avg_poll_us, summary.tick_max_poll_us));
-    lines.push(timing_line("Visualizer", summary.tick_avg_vis_us, summary.tick_max_vis_us));
+    lines.push(timing_line("IPC poll", summary.tick_avg_poll_us, summary.tick_max_poll_us, false));
+    lines.push(timing_line("Visualizer", summary.tick_avg_vis_us, summary.tick_max_vis_us, false));
+    lines.push(Line::from(""));
+
+    // Visualizer responsiveness section
+    lines.push(section_header("Visualizer responsiveness"));
+    // Settling frames = ln(0.1) / ln(noise_reduction) — frames for bars to reach 90% of target
+    let noise_reduction = app.visualizer.noise_reduction;
+    let settling_frames = if noise_reduction > 0.0 && noise_reduction < 1.0 {
+        (0.1_f64.ln() / noise_reduction.ln()).ceil() as u64
+    } else {
+        0
+    };
+    let settling_ms = settling_frames * tick_ms;
+    let settling_color = if settling_ms > 200 {
+        RED
+    } else if settling_ms > 100 {
+        YELLOW
+    } else {
+        NEON_GREEN
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  Smoothing     "),
+            Style::default().fg(Color::Rgb(140, 140, 160)),
+        ),
+        Span::styled(
+            format!("{:.0}%", noise_reduction * 100.0),
+            Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  │  ", Style::default().fg(Color::Rgb(50, 50, 70))),
+        Span::styled("{ } ", Style::default().fg(Color::Rgb(80, 80, 110))),
+        Span::styled("adjust", Style::default().fg(Color::Rgb(60, 60, 90))),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  Settling      "),
+            Style::default().fg(Color::Rgb(140, 140, 160)),
+        ),
+        Span::styled(
+            format!("{} frames", settling_frames),
+            Style::default().fg(settling_color),
+        ),
+        Span::styled(
+            format!("  (~{}ms @ {}ms tick)", settling_ms, tick_ms),
+            Style::default().fg(Color::Rgb(100, 100, 130)),
+        ),
+    ]));
     lines.push(Line::from(""));
 
     // Totals
     lines.push(section_header("Totals"));
     lines.push(column_header());
-    lines.push(timing_line("CPU work", work_avg, max.work_us()));
-    lines.push(timing_line("Idle wait", avg.event_wait_us, max.event_wait_us));
-    lines.push(timing_line("Frame", avg.total_us, max.total_us));
+    lines.push(timing_line("CPU work", work_avg, max.work_us(), false));
+    lines.push(timing_line("Idle wait", avg.event_wait_us, max.event_wait_us, true));
+    lines.push(timing_line("Frame", avg.total_us, max.total_us, true));
     lines.push(Line::from(""));
 
     lines.push(Line::from(""));
@@ -124,7 +170,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" >80%", Style::default().fg(Color::Rgb(60, 60, 90))),
     ]));
     lines.push(Line::from(Span::styled(
-        "  ` close  │  < > tick rate  │  2s rolling window",
+        "  ` close  │  < > tick rate  │  { } smoothing  │  2s rolling window",
         Style::default().fg(Color::Rgb(60, 60, 90)),
     )));
 
@@ -157,23 +203,46 @@ fn column_header() -> Line<'static> {
     ))
 }
 
-fn timing_line(label: &str, avg: u64, max: u64) -> Line<'static> {
-    let color = if avg > 5000 {
-        RED
-    } else if avg > 2000 {
-        YELLOW
-    } else if avg > 500 {
-        Color::Rgb(180, 200, 180)
+fn timing_line(label: &str, avg: u64, max: u64, invert: bool) -> Line<'static> {
+    // For inverted rows (idle wait, frame), high values are good (green)
+    // For normal rows (CPU work, draw, etc.), low values are good (green)
+    let color = if invert {
+        // High = good (sleeping a lot), low = bad (busy)
+        if avg < 2000 {
+            RED
+        } else if avg < 5000 {
+            YELLOW
+        } else {
+            NEON_GREEN
+        }
     } else {
-        NEON_GREEN
+        if avg > 5000 {
+            RED
+        } else if avg > 2000 {
+            YELLOW
+        } else if avg > 500 {
+            Color::Rgb(180, 200, 180)
+        } else {
+            NEON_GREEN
+        }
     };
 
-    let max_color = if max > 10000 {
-        RED
-    } else if max > 5000 {
-        YELLOW
+    let max_color = if invert {
+        if max < 2000 {
+            RED
+        } else if max < 5000 {
+            YELLOW
+        } else {
+            Color::Rgb(100, 100, 130)
+        }
     } else {
-        Color::Rgb(100, 100, 130)
+        if max > 10000 {
+            RED
+        } else if max > 5000 {
+            YELLOW
+        } else {
+            Color::Rgb(100, 100, 130)
+        }
     };
 
     Line::from(vec![
