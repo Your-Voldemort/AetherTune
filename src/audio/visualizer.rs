@@ -5,10 +5,10 @@ use crate::audio::pipe::{SharedAnalysis, NUM_BANDS};
 const NUM_BARS: usize = NUM_BANDS; // Match the frequency bands
 const MAX_HEIGHT: u16 = 12;
 
-/// Noise reduction factor (0.0 = fast/noisy, 1.0 = slow/smooth)
+/// Default noise reduction factor (0.0 = fast/noisy, 1.0 = slow/smooth)
 /// Controls both integral smoothing weight and gravity modifier.
 /// CAVA default is 0.77; we use 0.70 for slightly more responsiveness in a TUI.
-const NOISE_REDUCTION: f64 = 0.70;
+const DEFAULT_NOISE_REDUCTION: f64 = 0.70;
 
 /// Gravity acceleration increment per frame when a bar is falling.
 /// CAVA uses 0.028; we match that.
@@ -43,6 +43,9 @@ pub struct Visualizer {
     sensitivity: f64,
     /// Whether we're still in the initial ramp-up phase
     sens_init: bool,
+    /// Noise reduction / smoothing weight (0.0 = instant, 1.0 = frozen)
+    /// Adjustable at runtime via the profiler overlay
+    pub noise_reduction: f64,
 }
 
 impl Visualizer {
@@ -58,6 +61,7 @@ impl Visualizer {
             cava_mem: vec![0.0; NUM_BARS],
             sensitivity: 1.0,
             sens_init: true,
+            noise_reduction: DEFAULT_NOISE_REDUCTION,
         }
     }
 
@@ -83,7 +87,7 @@ impl Visualizer {
         let vol_scale = volume as f64 / 100.0;
 
         // Gravity modifier: higher noise_reduction = lower gravity = slower fall
-        let gravity_mod = 1.0 - (NOISE_REDUCTION * 0.5);
+        let gravity_mod = 1.0 - (self.noise_reduction * 0.5);
 
         let mut overshoot = false;
         let silence = rms < 0.001;
@@ -113,7 +117,7 @@ impl Visualizer {
             // --- Integral smoothing ---
             // Weighted running average: memory accumulates over time,
             // blending the previous memory with the current value
-            out = self.cava_mem[i] * NOISE_REDUCTION + out;
+            out = self.cava_mem[i] * self.noise_reduction + out;
             self.cava_mem[i] = out;
 
             // --- Autosens clamping ---
@@ -158,7 +162,7 @@ impl Visualizer {
 
         if !is_playing {
             // Apply gravity fall-off even in simulated mode for smooth stop
-            let gravity_mod = 1.0 - (NOISE_REDUCTION * 0.5);
+            let gravity_mod = 1.0 - (self.noise_reduction * 0.5);
             for i in 0..NUM_BARS {
                 if self.bars[i] > 0 {
                     self.cava_fall[i] += GRAVITY_STEP;
@@ -183,7 +187,7 @@ impl Visualizer {
         self.active = true;
         let mut rng = rand::rng();
         let vol_scale = volume as f64 / 100.0;
-        let gravity_mod = 1.0 - (NOISE_REDUCTION * 0.5);
+        let gravity_mod = 1.0 - (self.noise_reduction * 0.5);
 
         if self.frame % 3 == 0 {
             let has_real_data = audio_level > 0.01;
@@ -220,7 +224,7 @@ impl Visualizer {
                 self.prev_out[i] = out;
 
                 // Integral smoothing
-                out = self.cava_mem[i] * NOISE_REDUCTION + out;
+                out = self.cava_mem[i] * self.noise_reduction + out;
                 self.cava_mem[i] = out;
 
                 out = out.min(1.0);
@@ -319,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_gravity_constants_are_sane() {
-        assert!(NOISE_REDUCTION > 0.0 && NOISE_REDUCTION < 1.0);
+        assert!(DEFAULT_NOISE_REDUCTION > 0.0 && DEFAULT_NOISE_REDUCTION < 1.0);
         assert!(GRAVITY_STEP > 0.0 && GRAVITY_STEP < 0.1);
         assert!(AUTOSENS_DECREASE < 1.0);
         assert!(AUTOSENS_INCREASE > 1.0);

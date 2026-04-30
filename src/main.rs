@@ -286,6 +286,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if app.show_perf && app.keybindings.perf_tick_faster.matches(kc) {
                             app.tick_rate_ms = app.tick_rate_ms.saturating_sub(10).max(10);
                             app.save_config();
+
+                        // Smoothing adjustment (only when profiler is open)
+                        } else if app.show_perf && kc == KeyCode::Char('{') {
+                            // Decrease smoothing (more responsive)
+                            let nr = app.visualizer.noise_reduction;
+                            app.visualizer.noise_reduction = ((nr - 0.05) * 100.0).round() / 100.0;
+                            if app.visualizer.noise_reduction < 0.05 {
+                                app.visualizer.noise_reduction = 0.05;
+                            }
+                        } else if app.show_perf && kc == KeyCode::Char('}') {
+                            // Increase smoothing (smoother)
+                            let nr = app.visualizer.noise_reduction;
+                            app.visualizer.noise_reduction = ((nr + 0.05) * 100.0).round() / 100.0;
+                            if app.visualizer.noise_reduction > 0.95 {
+                                app.visualizer.noise_reduction = 0.95;
+                            }
                         }
                     }
                     InputMode::Editing => match key.code {

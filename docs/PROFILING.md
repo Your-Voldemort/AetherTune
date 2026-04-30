@@ -8,6 +8,8 @@ Press `` ` `` (backtick) to toggle the profiler overlay. While it's open:
 
 - `>` or `.` — decrease tick rate by 10ms (faster updates, more CPU)
 - `<` or `,` — increase tick rate by 10ms (slower updates, less CPU)
+- `}` — increase smoothing by 5% (smoother bars, more visual lag)
+- `{` — decrease smoothing by 5% (snappier bars, more jitter)
 
 ## Reading the Profiler
 
@@ -67,11 +69,35 @@ These should be well under 100µs each. If IPC poll is consistently high, it may
 | **Idle wait** | Time spent sleeping in `event::poll()`, waiting for input or timeout. This is not CPU work. |
 | **Frame** | Full wall-clock time per loop iteration (work + idle) |
 
+Idle wait and Frame use **inverted color coding**: high values are green (the CPU is mostly sleeping, which is good), low values are red (the app is struggling to find idle time).
+
+### Visualizer Responsiveness
+
+This section shows how quickly the visualizer bars react to changes in the audio signal.
+
+```
+Smoothing     70%  │  { } adjust
+Settling      7 frames  (~70ms @ 10ms tick)
+```
+
+**Smoothing** is the noise reduction weight used in the visualizer's integral smoothing (an exponential moving average). Higher values produce smoother, more flowing bar animation but introduce visual lag. Lower values make bars snap to the audio faster but may look jittery. The default is 70% (CAVA uses 77%). Adjustable in 5% steps with `{` and `}`.
+
+**Settling** is the theoretical number of frames for bars to reach 90% of a new target value, calculated as `⌈ln(0.1) / ln(smoothing)⌉`. The millisecond estimate multiplies this by your current tick rate. Color coding: green under 200ms, yellow under 500ms, red above.
+
+| Smoothing | Settling (frames) | @ 10ms tick | @ 30ms tick | Feel |
+|-----------|-------------------|-------------|-------------|------|
+| 50% | 4 | 40ms | 120ms | Snappy, some jitter |
+| 70% | 7 | 70ms | 210ms | Default — responsive with smooth flow |
+| 85% | 15 | 150ms | 450ms | Very smooth, noticeable lag |
+| 95% | 45 | 450ms | 1350ms | Flowing but sluggish |
+
+The smoothing value is runtime-only and resets to the default (70%) on restart.
+
 ### The avg and max Columns
 
 **avg** is the mean over the rolling window. **max** is the highest value seen in that same window. Both use a 2-second rolling window (~60 frames), so old spikes fall off naturally — you're always seeing recent performance, not a startup spike from minutes ago.
 
-Max values are color-coded: green under 5,000µs, yellow under 10,000µs, red above.
+For CPU work metrics (Draw, Key input, IPC poll, Visualizer, CPU work), values are color-coded where low is green and high is red. For idle metrics (Idle wait, Frame), the coloring is inverted — high values are green because they indicate the CPU is mostly sleeping.
 
 ## Optimizing for Your System
 
