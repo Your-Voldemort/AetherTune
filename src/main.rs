@@ -339,6 +339,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Check if a background station fetch has completed
             app.poll_fetch();
 
+            // Update FFT rate measurement for profiler
+            app.update_fft_rate();
+
             poll_us = poll_start.elapsed().as_micros() as u64;
 
             let vis_start = Instant::now();

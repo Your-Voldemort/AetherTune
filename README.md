@@ -19,7 +19,7 @@ AetherTune is a TUI (terminal user interface) application that lets you browse, 
 
 - **Station browsing** — browse thousands of stations via the RadioBrowser API, filter by genre, search by name. Results are sorted by popularity with broken streams and spam filtered out automatically
 - **Local blending** — optionally configure your country code in Settings to blend ~30% local stations into every genre and search result, interleaved naturally with global results
-- **Real-time audio visualization** — 16-band spectrum analyzer using an in-place radix-2 FFT on captured PCM audio via PulseAudio/PipeWire monitor, with CAVA-inspired gravity fall-off, integral smoothing, and automatic sensitivity
+- **Real-time audio visualization** — 16-band spectrum analyzer using a sliding-window radix-2 FFT (~94 updates/sec) on captured PCM audio via PulseAudio/PipeWire monitor, with CAVA-inspired gravity fall-off, integral smoothing, and automatic sensitivity
 - **Song log** — automatically tracks song changes from ICY stream metadata with timestamps
 - **Stream health monitor** — live bitrate (actual vs advertised), buffer status, codec info, connection uptime
 - **Favorites & history** — save stations, track listening history, persisted to JSON
@@ -218,7 +218,8 @@ Below is a list of default keyboard shortcuts. All keybindings can be remapped f
 | `?`                    | Help overlay                                 |
 | `S`                    | Customize keybindings                        |
 | `` ` ``                | Performance profiler                         |
-| `<` / `>`              | Adjust tick rate (when profiler is open)     |
+| `<` / `>`              | Adjust tick rate (when profiler is open)      |
+| `{` / `}`              | Adjust visualizer smoothing (when profiler is open) |
 | `q`                    | Quit                                         |
 
 ## Settings
@@ -300,7 +301,7 @@ When `parec` is available, AetherTune captures audio through the PulseAudio/Pipe
 
 1. **mpv** plays audio normally through the default audio output
 2. **parec** captures the monitor source and writes raw s16le stereo 48kHz PCM to a named FIFO
-3. A background thread reads the FIFO with minimal buffering (one 4KB chunk ≈ 21ms of audio) and runs an **in-place radix-2 Cooley-Tukey FFT** with Hann windowing — producing 512 frequency bins that are grouped into 16 logarithmically-spaced bands (50Hz–10kHz). The FFT, window coefficients, and band edges are all pre-allocated at thread startup for zero per-frame heap allocation.
+3. A background thread reads the FIFO using a **sliding window** — 512 new samples (~10.7ms) at a time, shifted into a 1024-sample buffer — then runs an **in-place radix-2 Cooley-Tukey FFT** with Hann windowing. This produces ~94 FFT updates/sec (2× the rate of full-chunk reads) without sacrificing frequency resolution. The 512 frequency bins are grouped into 16 logarithmically-spaced bands (50Hz–10kHz). FFT buffers, window coefficients, and band edges are all pre-allocated at thread startup for zero per-frame heap allocation.
 4. Band energies and RMS are pushed to a shared `Arc<Mutex<AudioAnalysis>>`
 5. The visualizer applies CAVA-inspired post-processing: gravity fall-off (accelerating drop), integral smoothing (weighted running average), and automatic sensitivity adjustment
 

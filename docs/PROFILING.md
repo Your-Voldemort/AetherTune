@@ -78,6 +78,7 @@ This section shows how quickly the visualizer bars react to changes in the audio
 ```
 Smoothing     70%  │  { } adjust
 Settling      7 frames  (~70ms @ 10ms tick)
+FFT rate      96/s  (~10.5ms per update)
 ```
 
 **Smoothing** is the noise reduction weight used in the visualizer's integral smoothing (an exponential moving average). Higher values produce smoother, more flowing bar animation but introduce visual lag. Lower values make bars snap to the audio faster but may look jittery. The default is 70% (CAVA uses 77%). Adjustable in 5% steps with `{` and `}`.
@@ -92,6 +93,8 @@ Settling      7 frames  (~70ms @ 10ms tick)
 | 95% | 45 | 450ms | 1350ms | Flowing but sluggish |
 
 The smoothing value is runtime-only and resets to the default (70%) on restart.
+
+**FFT rate** shows how many FFT updates per second the audio reader thread is producing. The reader uses a sliding window — it reads 512 new samples (~10.7ms of audio at 48kHz) at a time, shifts the 1024-sample buffer, and runs a full FFT on the window. This produces ~94 updates/sec, roughly 2× what a full 1024-sample read would give (~47/s), without sacrificing frequency resolution. Color coding: green ≥80/s, yellow ≥40/s, red below. Shows "—" when no audio capture is active (e.g., on Windows or when parec is unavailable).
 
 ### The avg and max Columns
 
@@ -140,21 +143,26 @@ Each frame records a `had_tick` flag indicating whether the IPC poll and visuali
 
 The sparkline records one CPU load sample per frame into a separate 40-entry ring buffer, displayed oldest-to-newest.
 
+### Audio Reader (Sliding Window)
+
+The `parec` reader thread uses a sliding window to maximize FFT update rate without sacrificing frequency resolution. Instead of reading a full 1024-sample chunk (~21ms at 48kHz) before running FFT, it reads 512 new samples (~10.7ms), shifts the 1024-sample buffer left, and runs FFT on the full window. This produces ~94 FFT updates/sec — 2× the rate of full-chunk reads — while keeping the same 1024-point FFT resolution. The `fft_count` field on `AudioAnalysis` is incremented on each update, and the profiler computes the rate by sampling this counter every ~1 second.
+
 ## Reference Benchmarks
 
 Measured on a Ryzen 9 5900X running Hyprland/PipeWire, kitty terminal, streaming 192kbps MP3 with real audio visualization active:
 
-| Tick rate | FPS | Avg draw | Avg work | CPU load | Status |
-|-----------|-----|----------|----------|----------|--------|
-| 10ms | 100 | ~5,500µs | ~5,550µs | 55% | OK |
-| 20ms | 50 | ~5,500µs | ~5,550µs | 27% | IDLE |
-| 30ms | 33 | ~5,500µs | ~5,550µs | 18% | IDLE |
-| 50ms | 20 | ~5,500µs | ~5,550µs | 11% | IDLE |
+| Tick rate | FPS | Avg draw | Avg work | CPU load | FFT rate | Status |
+|-----------|-----|----------|----------|----------|----------|--------|
+| 10ms | 100 | ~5,700µs | ~5,770µs | 57% | ~96/s | OK |
+| 20ms | 50 | ~5,500µs | ~5,550µs | 27% | ~96/s | IDLE |
+| 30ms | 33 | ~5,500µs | ~5,550µs | 18% | ~96/s | IDLE |
+| 50ms | 20 | ~5,500µs | ~5,550µs | 11% | ~96/s | IDLE |
 
 Key observations:
 
-- **Draw cost is constant** (~5.5ms) regardless of tick rate. It dominates the work budget.
+- **Draw cost is constant** (~5.5–5.7ms) regardless of tick rate. It dominates the work budget.
 - **IPC poll and visualizer** are negligible (20–80µs combined on tick frames).
+- **FFT rate is constant** (~96/s) regardless of tick rate — the reader thread runs independently.
 - **Load scales inversely with tick rate** since the same work runs against a larger budget.
 - **30ms (33 FPS)** is the default — good balance of visualizer smoothness vs resource usage.
 
