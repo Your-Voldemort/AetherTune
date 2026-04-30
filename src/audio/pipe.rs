@@ -20,6 +20,8 @@ pub struct AudioAnalysis {
     pub rms: f64,
     /// Whether the reader is actively receiving data
     pub active: bool,
+    /// Total number of FFT updates since the reader started
+    pub fft_count: u64,
 }
 
 impl AudioAnalysis {
@@ -28,6 +30,7 @@ impl AudioAnalysis {
             bands: [0.0; NUM_BANDS],
             rms: 0.0,
             active: false,
+            fft_count: 0,
         }
     }
 }
@@ -81,17 +84,22 @@ fn reader_loop(fifo: &std::path::Path, analysis: &SharedAnalysis) {
         Err(_) => return,
     };
 
-    // Minimal buffering — just enough for one chunk to reduce latency.
-    // At 48kHz stereo s16le: 4 bytes per frame, 1024 frames = 4096 bytes.
-    // Previous 16KB buffer could hold ~4 chunks, adding ~80ms of delay.
-    const FRAMES: usize = FFT_SIZE;
+    // Sliding window approach: read STEP_FRAMES new samples at a time,
+    // shift the sample buffer, and run FFT on the full FFT_SIZE window.
+    // This doubles the FFT update rate without reducing frequency resolution.
+    //
+    // At 48kHz stereo s16le:
+    //   FFT_SIZE  = 1024 samples = 4096 bytes = ~21.3ms (full window)
+    //   STEP      =  512 samples = 2048 bytes = ~10.7ms (read chunk)
+    //   FFT rate  = 48000 / 512  = ~94 updates/sec (vs ~47 with full reads)
+    const STEP_FRAMES: usize = FFT_SIZE / 2;
     const BYTES_PER_FRAME: usize = 4; // 2 channels * 2 bytes (s16le)
-    const CHUNK_SIZE: usize = FRAMES * BYTES_PER_FRAME;
+    const STEP_BYTES: usize = STEP_FRAMES * BYTES_PER_FRAME;
 
-    let mut reader = std::io::BufReader::with_capacity(CHUNK_SIZE, file);
+    let mut reader = std::io::BufReader::with_capacity(STEP_BYTES, file);
 
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut mono_samples = vec![0.0f64; FRAMES];
+    let mut read_buf = vec![0u8; STEP_BYTES];
+    let mut mono_samples = vec![0.0f64; FFT_SIZE];
 
     // Pre-allocate FFT work buffers to avoid per-frame allocation
     let mut fft_re = vec![0.0f64; FFT_SIZE];
@@ -107,8 +115,8 @@ fn reader_loop(fifo: &std::path::Path, analysis: &SharedAnalysis) {
     let band_edges = compute_band_edges();
 
     loop {
-        // Read a full chunk
-        match reader.read_exact(&mut buf) {
+        // Read a half-window chunk (512 samples = 2048 bytes)
+        match reader.read_exact(&mut read_buf) {
             Ok(()) => {}
             Err(_) => {
                 // FIFO closed or error — mpv stopped
@@ -121,18 +129,21 @@ fn reader_loop(fifo: &std::path::Path, analysis: &SharedAnalysis) {
             }
         }
 
-        // Convert s16le stereo to mono f64 samples
-        for i in 0..FRAMES {
+        // Shift the sample buffer left by STEP_FRAMES (discard oldest half)
+        mono_samples.copy_within(STEP_FRAMES.., 0);
+
+        // Convert new s16le stereo samples to mono f64 and fill the second half
+        for i in 0..STEP_FRAMES {
             let offset = i * BYTES_PER_FRAME;
-            let left = i16::from_le_bytes([buf[offset], buf[offset + 1]]) as f64;
-            let right = i16::from_le_bytes([buf[offset + 2], buf[offset + 3]]) as f64;
-            mono_samples[i] = (left + right) / 2.0 / 32768.0; // normalize to -1..1
+            let left = i16::from_le_bytes([read_buf[offset], read_buf[offset + 1]]) as f64;
+            let right = i16::from_le_bytes([read_buf[offset + 2], read_buf[offset + 3]]) as f64;
+            mono_samples[FFT_SIZE - STEP_FRAMES + i] = (left + right) / 2.0 / 32768.0;
         }
 
-        // Compute overall RMS
+        // Compute overall RMS on the full window
         let rms = {
             let sum_sq: f64 = mono_samples.iter().map(|s| s * s).sum();
-            (sum_sq / FRAMES as f64).sqrt()
+            (sum_sq / FFT_SIZE as f64).sqrt()
         };
 
         // Apply Hann window and load into FFT real buffer, zero imaginary
@@ -157,6 +168,7 @@ fn reader_loop(fifo: &std::path::Path, analysis: &SharedAnalysis) {
             a.active = true;
             a.rms = rms;
             a.bands = band_energies;
+            a.fft_count += 1;
         }
     }
 }

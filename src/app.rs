@@ -405,6 +405,12 @@ pub struct App {
     pub show_perf: bool,
     /// Current tick rate in ms (adjustable with < > keys when perf overlay is shown)
     pub tick_rate_ms: u64,
+    /// FFT updates per second (measured from the reader thread's fft_count)
+    pub fft_rate: f64,
+    /// Previous fft_count snapshot for computing rate
+    fft_count_prev: u64,
+    /// Timestamp of last FFT rate measurement
+    fft_rate_time: std::time::Instant,
     /// Country code for blended local/global station discovery (from config)
     pub country_code: String,
     /// Remappable keybindings (persisted to config)
@@ -505,6 +511,9 @@ impl App {
             perf: PerfStats::new(),
             show_perf: false,
             tick_rate_ms: config.tick_rate_ms,
+            fft_rate: 0.0,
+            fft_count_prev: 0,
+            fft_rate_time: std::time::Instant::now(),
             country_code: config.country_code.clone(),
             keybindings: config.keybindings,
             settings_selected: 0,
@@ -925,6 +934,24 @@ impl App {
                 }
             }
             self.last_media_title = current_title;
+        }
+    }
+
+    /// Update the FFT updates/sec measurement.
+    /// Called each tick; computes rate over the elapsed interval.
+    pub fn update_fft_rate(&mut self) {
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.fft_rate_time).as_secs_f64();
+
+        // Update every ~1 second to avoid jittery measurements
+        if elapsed >= 1.0 {
+            if let Ok(a) = self.analysis.lock() {
+                let count = a.fft_count;
+                let delta = count.saturating_sub(self.fft_count_prev);
+                self.fft_rate = delta as f64 / elapsed;
+                self.fft_count_prev = count;
+            }
+            self.fft_rate_time = now;
         }
     }
 

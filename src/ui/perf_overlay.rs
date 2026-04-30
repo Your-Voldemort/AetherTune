@@ -147,6 +147,38 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Rgb(100, 100, 130)),
         ),
     ]));
+    let fft_rate = app.fft_rate;
+    let fft_color = if fft_rate < 1.0 {
+        Color::Rgb(100, 100, 130) // inactive/no data
+    } else if fft_rate >= 80.0 {
+        NEON_GREEN
+    } else if fft_rate >= 40.0 {
+        YELLOW
+    } else {
+        RED
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  FFT rate      "),
+            Style::default().fg(Color::Rgb(140, 140, 160)),
+        ),
+        Span::styled(
+            if fft_rate < 1.0 {
+                "—".to_string()
+            } else {
+                format!("{:.0}/s", fft_rate)
+            },
+            Style::default().fg(fft_color),
+        ),
+        Span::styled(
+            if fft_rate < 1.0 {
+                "  (no audio capture)".to_string()
+            } else {
+                format!("  (~{:.1}ms per update)", 1000.0 / fft_rate)
+            },
+            Style::default().fg(Color::Rgb(100, 100, 130)),
+        ),
+    ]));
     lines.push(Line::from(""));
 
     // Totals
