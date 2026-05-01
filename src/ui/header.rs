@@ -1,5 +1,5 @@
 use crate::app::{App, InputMode};
-use super::helpers::*;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -12,17 +12,17 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     if app.input_mode == InputMode::Editing {
         // Search mode: show search input
         let search_line = Line::from(vec![
-            Span::styled(" 🔍 > ", Style::default().fg(YELLOW)),
+            Span::styled(" 🔍 > ", Style::default().fg(app.theme.text_warn)),
             Span::styled(
                 format!("{}_", app.search_query),
-                Style::default().fg(YELLOW),
+                Style::default().fg(app.theme.text_warn),
             ),
         ]);
 
-        let block = header_block();
+        let block = header_block(&app.theme);
         let paragraph = Paragraph::new(search_line)
             .block(block)
-            .style(Style::default().bg(PANEL_BG));
+            .style(Style::default().bg(app.theme.bg_panel));
         f.render_widget(paragraph, area);
     } else {
         // Normal mode: LIVE indicator + genre + hints
@@ -31,7 +31,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 " ▶ LIVE ",
                 Style::default()
                     .fg(Color::Black)
-                    .bg(NEON_GREEN)
+                    .bg(app.theme.positive)
                     .add_modifier(Modifier::BOLD),
             )
         } else {
@@ -48,6 +48,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         use crate::storage::config::keycode_to_string;
         let search_key = keycode_to_string(app.keybindings.search.primary);
         let genre_key = keycode_to_string(app.keybindings.genre_picker.primary);
+        let theme_key = keycode_to_string(app.keybindings.theme_picker.primary);
         let help_key = keycode_to_string(app.keybindings.help.primary);
         let settings_key = keycode_to_string(app.keybindings.settings.primary);
 
@@ -56,34 +57,34 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             playing_indicator,
             Span::styled(
                 format!("  Genre: {}", cat),
-                Style::default().fg(CYAN),
+                Style::default().fg(app.theme.accent),
             ),
             Span::styled(
-                format!("  │  {} search  │  {} genre  │  {} help  │  {} settings", search_key, genre_key, help_key, settings_key),
+                format!("  │  {} search  │  {} genre  │  {} theme  │  {} help  │  {} settings", search_key, genre_key, theme_key, help_key, settings_key),
                 Style::default().fg(Color::Rgb(80, 80, 110)),
             ),
         ]);
 
-        let block = header_block();
+        let block = header_block(&app.theme);
         let paragraph = Paragraph::new(line)
             .block(block)
-            .style(Style::default().bg(PANEL_BG));
+            .style(Style::default().bg(app.theme.bg_panel));
         f.render_widget(paragraph, area);
     }
 }
 
-fn header_block() -> Block<'static> {
+fn header_block(theme: &crate::ui::themes::Theme) -> Block<'static> {
     Block::default()
         .title(Line::from(vec![
-            Span::styled(" 🎵 ", Style::default().fg(MAGENTA)),
+            Span::styled(" 🎵 ", Style::default().fg(theme.secondary)),
             Span::styled(
                 "AetherTune",
-                Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
             ),
             Span::styled(" ", Style::default()),
         ]))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(60, 60, 100)))
-        .style(Style::default().bg(PANEL_BG))
+        .style(Style::default().bg(theme.bg_panel))
 }

@@ -215,6 +215,7 @@ Below is a list of default keyboard shortcuts. All keybindings can be remapped f
 | `[` / `]`              | Cycle genre category                         |
 | `Shift+Tab`            | Cycle genre category (backward)              |
 | `g`                    | Genre picker overlay                         |
+| `t`                    | Theme picker overlay                         |
 | `?`                    | Help overlay                                 |
 | `S`                    | Customize keybindings                        |
 | `` ` ``                | Performance profiler                         |
@@ -237,6 +238,21 @@ Leave the country code empty (backspace to clear) for pure global results — th
 ### Keybindings
 
 Every keyboard shortcut can be remapped. Press `S` during normal playback to open the keybinding settings overlay.
+
+### Themes
+
+Press `t` to open the theme picker. AetherTune ships with 8 built-in themes:
+
+- **CRT** — the default phosphor terminal aesthetic (cyan/magenta/neon green)
+- **Gruvbox** — warm retro palette
+- **Nord** — cool arctic blues
+- **Dracula** — dark purple
+- **Monokai** — classic editor colors
+- **Catppuccin** — pastel dark
+- **Hacker** — green-on-black matrix style
+- **Solarized** — precision colors for readability
+
+Themes apply to the player UI only (not the launcher or exit animation). Your selection is persisted to `~/.aethertune/config.json`. The theme picker shows live color swatches and previews each theme as you navigate.
 
 In the overlay:
 - **↑/↓** — navigate the action list
@@ -290,6 +306,8 @@ src/
     ├── media_browser.rs      Media source switcher (Radio/Subsonic stub)
     ├── overlays.rs           Help + station detail popups
     ├── genre_picker.rs       Genre selection overlay
+    ├── theme_picker.rs       Theme selection overlay
+    ├── themes.rs             Color theme definitions (8 built-in themes)
     ├── settings.rs           Keybinding settings overlay
     ├── shutdown.rs           CRT power-off animation on quit
     └── perf_overlay.rs       Built-in performance profiler

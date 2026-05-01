@@ -1,5 +1,5 @@
 use crate::app::App;
-use super::helpers::*;
+use super::helpers::info_line;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -15,13 +15,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(Span::styled(
             " Now Playing ",
-            Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(60, 60, 100)))
         .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(PANEL_BG));
+        .style(Style::default().bg(app.theme.bg_panel));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -36,7 +36,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 buf.get_mut(x, area.y)
                     .set_char(ch)
                     .set_fg(Color::Rgb(100, 100, 140))
-                    .set_bg(PANEL_BG);
+                    .set_bg(app.theme.bg_panel);
             }
         }
     }
@@ -49,7 +49,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     if let Some(np) = &app.now_playing {
         lines.push(Line::from(vec![
-            Span::styled("♪ ", Style::default().fg(NEON_GREEN)),
+            Span::styled("♪ ", Style::default().fg(app.theme.positive)),
             Span::styled(
                 np.name.clone(),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
@@ -62,17 +62,17 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled("  ▸ ", Style::default().fg(Color::Rgb(80, 80, 120))),
                     Span::styled(
                         title.clone(),
-                        Style::default().fg(YELLOW).add_modifier(Modifier::ITALIC),
+                        Style::default().fg(app.theme.text_warn).add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }
         }
 
         lines.push(Line::from(""));
-        lines.push(info_line("Genre", &np.genre, MAGENTA));
-        lines.push(info_line("Country", &np.country, CYAN));
-        lines.push(info_line("Bitrate", &format!("{} kbps", np.bitrate), YELLOW));
-        lines.push(info_line("Codec", &np.codec, ORANGE));
+        lines.push(info_line("Genre", &np.genre, app.theme.secondary));
+        lines.push(info_line("Country", &np.country, app.theme.accent));
+        lines.push(info_line("Bitrate", &format!("{} kbps", np.bitrate), app.theme.text_warn));
+        lines.push(info_line("Codec", &np.codec, app.theme.text_warm));
 
         if !np.homepage.is_empty() {
             lines.push(info_line("Web", &np.homepage, Color::Rgb(100, 150, 255)));
@@ -81,12 +81,12 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             "⚠ Playback Error",
-            Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.text_error).add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             err.clone(),
-            Style::default().fg(YELLOW),
+            Style::default().fg(app.theme.text_warn),
         )));
     } else {
         lines.push(Line::from(""));

@@ -204,6 +204,7 @@ pub enum Overlay {
     StationDetail,
     Settings,
     GenrePicker,
+    ThemePicker,
 }
 
 /// Lightweight per-frame performance counters.
@@ -426,6 +427,10 @@ pub struct App {
     pub pending_fetch: Option<oneshot::Receiver<FetchResult>>,
     /// Currently selected index in the genre picker overlay
     pub genre_selected: usize,
+    /// Active color theme for the player UI
+    pub theme: crate::ui::themes::Theme,
+    /// Currently selected index in the theme picker overlay
+    pub theme_selected: usize,
 }
 
 #[derive(Clone)]
@@ -521,6 +526,11 @@ impl App {
             is_loading: false,
             pending_fetch: None,
             genre_selected: 0,
+            theme: crate::ui::themes::Theme::by_name(&config.theme),
+            theme_selected: {
+                let all = crate::ui::themes::Theme::all();
+                all.iter().position(|t| t.name.eq_ignore_ascii_case(&config.theme)).unwrap_or(0)
+            },
         }
     }
 
@@ -712,6 +722,7 @@ impl App {
         config.tick_rate_ms = self.tick_rate_ms;
         config.volume = self.volume;
         config.keybindings = self.keybindings.clone();
+        config.theme = self.theme.name.to_string();
         config.save();
     }
 

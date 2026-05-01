@@ -103,6 +103,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 match app.input_mode {
                     InputMode::Normal => {
+                        // ── Theme picker overlay ──
+                        if app.overlay == Overlay::ThemePicker {
+                            let themes = crate::ui::themes::Theme::all();
+                            let total = themes.len();
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.overlay = Overlay::None;
+                                }
+                                _ if app.keybindings.theme_picker.matches(key.code) => {
+                                    app.overlay = Overlay::None;
+                                }
+                                KeyCode::Up | KeyCode::Char('k') => {
+                                    if app.theme_selected > 0 {
+                                        app.theme_selected -= 1;
+                                        // Live preview
+                                        app.theme = themes.into_iter().nth(app.theme_selected).unwrap();
+                                    }
+                                }
+                                KeyCode::Down | KeyCode::Char('j') => {
+                                    if app.theme_selected < total - 1 {
+                                        app.theme_selected += 1;
+                                        // Live preview
+                                        app.theme = themes.into_iter().nth(app.theme_selected).unwrap();
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    app.theme = themes.into_iter().nth(app.theme_selected).unwrap();
+                                    app.save_config();
+                                    app.overlay = Overlay::None;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         // ── Genre picker overlay ──
                         if app.overlay == Overlay::GenrePicker {
                             match key.code {
@@ -247,6 +282,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else if app.keybindings.genre_picker.matches(kc) {
                             app.genre_selected = app.category_index;
                             app.overlay = Overlay::GenrePicker;
+                        } else if app.keybindings.theme_picker.matches(kc) {
+                            // Open theme picker overlay
+                            let themes = crate::ui::themes::Theme::all();
+                            app.theme_selected = themes.iter()
+                                .position(|t| t.name == app.theme.name)
+                                .unwrap_or(0);
+                            app.overlay = Overlay::ThemePicker;
                         } else if app.keybindings.search.matches(kc) {
                             app.search_query.clear();
                             app.input_mode = InputMode::Editing;

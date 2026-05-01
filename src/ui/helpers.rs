@@ -27,15 +27,17 @@ pub fn info_line(label: &str, value: &str, color: Color) -> Line<'static> {
     ])
 }
 
-pub fn volume_line(volume: u32) -> Line<'static> {
+use crate::ui::themes::Theme;
+
+pub fn volume_line(volume: u32, theme: &Theme) -> Line<'static> {
     let filled = (volume as usize * 20) / 100;
     let empty = 20 - filled;
     let bar_color = if volume > 80 {
-        RED
+        theme.text_error
     } else if volume > 50 {
-        YELLOW
+        theme.text_warn
     } else {
-        NEON_GREEN
+        theme.positive
     };
 
     Line::from(vec![
@@ -54,13 +56,13 @@ pub fn volume_line(volume: u32) -> Line<'static> {
     ])
 }
 
-pub fn help_line(key: &str, desc: &str) -> Line<'static> {
+pub fn help_line_themed(key: &str, desc: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {:<14}", key),
-            Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.positive).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(desc.to_string(), Style::default().fg(DIM_WHITE)),
+        Span::styled(desc.to_string(), Style::default().fg(theme.text_muted)),
     ])
 }
 

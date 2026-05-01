@@ -1,5 +1,5 @@
 use crate::app::App;
-use super::helpers::*;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -40,7 +40,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(Span::styled(
         "♫  Select Genre",
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -59,13 +59,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         let is_active = i == app.category_index;
 
         let (indicator, bg, fg) = if is_selected && is_active {
-            ("▸ ", ACTIVE_BG, NEON_GREEN)
+            ("▸ ", ACTIVE_BG, app.theme.positive)
         } else if is_selected {
             ("▸ ", SELECTED_BG, Color::White)
         } else if is_active {
-            ("  ", ACTIVE_BG, NEON_GREEN)
+            ("  ", ACTIVE_BG, app.theme.positive)
         } else {
-            ("  ", Color::Reset, DIM_WHITE)
+            ("  ", Color::Reset, app.theme.text_muted)
         };
 
         let suffix = if is_active { " ●" } else { "" };
@@ -92,22 +92,22 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::Rgb(50, 50, 70)),
     )));
     lines.push(Line::from(vec![
-        Span::styled("  ↑/↓", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-        Span::styled(" nav  ", Style::default().fg(DIM_WHITE)),
-        Span::styled("Enter", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-        Span::styled(" select  ", Style::default().fg(DIM_WHITE)),
-        Span::styled("Esc", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-        Span::styled(" close", Style::default().fg(DIM_WHITE)),
+        Span::styled("  ↑/↓", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+        Span::styled(" nav  ", Style::default().fg(app.theme.text_muted)),
+        Span::styled("Enter", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+        Span::styled(" select  ", Style::default().fg(app.theme.text_muted)),
+        Span::styled("Esc", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+        Span::styled(" close", Style::default().fg(app.theme.text_muted)),
     ]));
 
     let block = Block::default()
         .title(Span::styled(
             " Genre ",
-            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.secondary).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MAGENTA))
+        .border_style(Style::default().fg(app.theme.secondary))
         .padding(Padding::new(1, 1, 1, 1))
         .style(Style::default().bg(Color::Rgb(10, 10, 20)));
 

@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::storage::config::keycode_to_string;
-use super::helpers::*;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -19,7 +19,7 @@ const COL_PRIMARY: usize = 8;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let popup_w: u16 = 48;
-    let popup_h: u16 = 34;
+    let popup_h: u16 = 35;
     let x = area.x + area.width.saturating_sub(popup_w) / 2;
     let y = area.y + area.height.saturating_sub(popup_h) / 2;
     let popup = Rect::new(x, y, popup_w.min(area.width), popup_h.min(area.height));
@@ -30,7 +30,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(Span::styled(
         "⚙  Keybinding Settings",
-        Style::default().fg(CYAN).add_modifier(Modifier::BOLD),
+        Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
 
@@ -38,15 +38,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::styled(
             format!("{:<width$}", "  Action", width = COL_ACTION),
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.text_warn).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!("{:<width$}", "Primary", width = COL_PRIMARY),
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.text_warn).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             "Alt".to_string(),
-            Style::default().fg(YELLOW).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.text_warn).add_modifier(Modifier::BOLD),
         ),
     ]));
 
@@ -70,7 +70,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         };
 
         let indicator = if is_selected { "▸ " } else { "  " };
-        let label_color = if is_selected { Color::White } else { DIM_WHITE };
+        let label_color = if is_selected { Color::White } else { app.theme.text_muted };
 
         // Build the action cell: indicator + label, padded to COL_ACTION total
         let action_text = format!("{}{}", indicator, label);
@@ -80,15 +80,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         let alt_str = binding.alt.map_or("—".to_string(), keycode_to_string);
 
         let primary_style = if awaiting_slot == Some(false) {
-            Style::default().fg(RED).add_modifier(Modifier::SLOW_BLINK | Modifier::BOLD).bg(row_bg)
+            Style::default().fg(app.theme.text_error).add_modifier(Modifier::SLOW_BLINK | Modifier::BOLD).bg(row_bg)
         } else {
-            Style::default().fg(NEON_GREEN).bg(row_bg)
+            Style::default().fg(app.theme.positive).bg(row_bg)
         };
 
         let alt_style = if awaiting_slot == Some(true) {
-            Style::default().fg(RED).add_modifier(Modifier::SLOW_BLINK | Modifier::BOLD).bg(row_bg)
+            Style::default().fg(app.theme.text_error).add_modifier(Modifier::SLOW_BLINK | Modifier::BOLD).bg(row_bg)
         } else {
-            Style::default().fg(ORANGE).bg(row_bg)
+            Style::default().fg(app.theme.text_warm).bg(row_bg)
         };
 
         let primary_display = if awaiting_slot == Some(false) {
@@ -129,37 +129,37 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     if app.settings_awaiting_key.is_some() {
         lines.push(Line::from(Span::styled(
             "  Press any key to assign • Esc cancel",
-            Style::default().fg(RED).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.text_error).add_modifier(Modifier::BOLD),
         )));
     } else {
         lines.push(Line::from(vec![
-            Span::styled("  ↑/↓", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" nav ", Style::default().fg(DIM_WHITE)),
-            Span::styled("Enter", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" primary ", Style::default().fg(DIM_WHITE)),
-            Span::styled("a", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" alt ", Style::default().fg(DIM_WHITE)),
-            Span::styled("d", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" clear", Style::default().fg(DIM_WHITE)),
+            Span::styled("  ↑/↓", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+            Span::styled(" nav ", Style::default().fg(app.theme.text_muted)),
+            Span::styled("Enter", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+            Span::styled(" primary ", Style::default().fg(app.theme.text_muted)),
+            Span::styled("a", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+            Span::styled(" alt ", Style::default().fg(app.theme.text_muted)),
+            Span::styled("d", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+            Span::styled(" clear", Style::default().fg(app.theme.text_muted)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  r", Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)),
-            Span::styled(" reset ", Style::default().fg(DIM_WHITE)),
-            Span::styled("R", Style::default().fg(YELLOW).add_modifier(Modifier::BOLD)),
-            Span::styled(" reset all ", Style::default().fg(DIM_WHITE)),
-            Span::styled("Esc/S", Style::default().fg(NEON_GREEN).add_modifier(Modifier::BOLD)),
-            Span::styled(" close", Style::default().fg(DIM_WHITE)),
+            Span::styled("  r", Style::default().fg(app.theme.text_warn).add_modifier(Modifier::BOLD)),
+            Span::styled(" reset ", Style::default().fg(app.theme.text_muted)),
+            Span::styled("R", Style::default().fg(app.theme.text_warn).add_modifier(Modifier::BOLD)),
+            Span::styled(" reset all ", Style::default().fg(app.theme.text_muted)),
+            Span::styled("Esc/S", Style::default().fg(app.theme.positive).add_modifier(Modifier::BOLD)),
+            Span::styled(" close", Style::default().fg(app.theme.text_muted)),
         ]));
     }
 
     let block = Block::default()
         .title(Span::styled(
             " Settings ",
-            Style::default().fg(MAGENTA).add_modifier(Modifier::BOLD),
+            Style::default().fg(app.theme.secondary).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(MAGENTA))
+        .border_style(Style::default().fg(app.theme.secondary))
         .padding(Padding::new(1, 1, 1, 1))
         .style(Style::default().bg(Color::Rgb(10, 10, 20)));
 

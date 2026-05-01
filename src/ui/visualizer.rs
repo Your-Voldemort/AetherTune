@@ -1,5 +1,5 @@
 use crate::app::App;
-use super::helpers::*;
+
 use ratatui::{
     style::{Color, Style},
     widgets::{Block, BorderType, Borders},
@@ -12,7 +12,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(60, 60, 100)))
-        .style(Style::default().bg(PANEL_BG));
+        .style(Style::default().bg(app.theme.bg_panel));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -47,7 +47,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 let buf = f.buffer_mut();
                 buf.get_mut(x, y)
                     .set_char('─')
-                    .set_fg(PEAK_COLOR);
+                    .set_fg(app.theme.peak);
             } else if row < bar_h && bar_h > 0 {
                 let frac = row as f32 / bar_h as f32;
                 let color = if frac < 0.5 {
