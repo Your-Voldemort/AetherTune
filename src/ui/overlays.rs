@@ -40,6 +40,7 @@ pub fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         help_line_themed(&binding_display(&kb.perf_tick_faster), "Tick rate faster (profiler)", &app.theme),
         help_line_themed(&binding_display(&kb.settings), "Keybinding settings", &app.theme),
         help_line_themed(&binding_display(&kb.theme_picker), "Theme picker", &app.theme),
+        help_line_themed(&binding_display(&kb.visualizer_toggle), "Toggle visualizer", &app.theme),
         help_line_themed(&binding_display(&kb.quit), "Quit", &app.theme),
         Line::from(""),
         Line::from(Span::styled(

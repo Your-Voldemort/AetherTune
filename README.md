@@ -216,6 +216,7 @@ Below is a list of default keyboard shortcuts. All keybindings can be remapped f
 | `Shift+Tab`            | Cycle genre category (backward)              |
 | `g`                    | Genre picker overlay                         |
 | `t`                    | Theme picker overlay                         |
+| `v`                    | Toggle visualizer on/off                     |
 | `?`                    | Help overlay                                 |
 | `S`                    | Customize keybindings                        |
 | `` ` ``                | Performance profiler                         |

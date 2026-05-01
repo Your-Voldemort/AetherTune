@@ -84,27 +84,41 @@ fn draw_body(f: &mut Frame, app: &App, area: Rect) {
     now_playing::draw(f, app, right_chunks[0]);
 
     // Middle row: song log on left, visualizer + stream info stacked on right
-    let middle_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(60), // Song log
-            Constraint::Percentage(40), // Visualizer + stream info column
-        ])
-        .split(right_chunks[1]);
+    if app.visualizer_enabled {
+        let middle_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(60), // Song log
+                Constraint::Percentage(40), // Visualizer + stream info column
+            ])
+            .split(right_chunks[1]);
 
-    song_log::draw(f, app, middle_chunks[0]);
+        song_log::draw(f, app, middle_chunks[0]);
 
-    // Right column: visualizer on top, stream info below
-    let vis_column = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(50), // Visualizer
-            Constraint::Percentage(50), // Stream info
-        ])
-        .split(middle_chunks[1]);
+        // Right column: visualizer on top, stream info below
+        let vis_column = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(50), // Visualizer
+                Constraint::Percentage(50), // Stream info
+            ])
+            .split(middle_chunks[1]);
 
-    visualizer::draw(f, app, vis_column[0]);
-    stream_info::draw(f, app, vis_column[1]);
+        visualizer::draw(f, app, vis_column[0]);
+        stream_info::draw(f, app, vis_column[1]);
+    } else {
+        // Visualizer disabled — song log gets full width, stream info below
+        let middle_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(70), // Song log (wider)
+                Constraint::Percentage(30), // Stream info only
+            ])
+            .split(right_chunks[1]);
+
+        song_log::draw(f, app, middle_chunks[0]);
+        stream_info::draw(f, app, middle_chunks[1]);
+    }
 
     // Bottom: media browser
     media_browser::draw(f, app, right_chunks[2]);

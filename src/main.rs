@@ -70,6 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Construct the app immediately with an empty station list.
     // The initial fetch runs in the background — stations appear once it completes.
     let mut app = app::App::new(Vec::new());
+    // If visualizer is disabled, start in low-power mode
+    if !app.visualizer_enabled {
+        app.tick_rate_ms = 200;
+    }
     app.start_initial_fetch();
 
     let mut last_tick = Instant::now();
@@ -289,6 +293,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 .position(|t| t.name == app.theme.name)
                                 .unwrap_or(0);
                             app.overlay = Overlay::ThemePicker;
+                        } else if app.keybindings.visualizer_toggle.matches(kc) {
+                            app.visualizer_enabled = !app.visualizer_enabled;
+                            app.player.visualizer_enabled = app.visualizer_enabled;
+                            if !app.visualizer_enabled {
+                                // Stop audio capture and drop to low-power tick rate
+                                app.player.stop_capture_if_running();
+                                app.tick_rate_ms = 200; // 5 FPS — plenty for static UI
+                            } else {
+                                // Restore user's configured tick rate from config
+                                let config = crate::storage::config::Config::load();
+                                app.tick_rate_ms = config.tick_rate_ms;
+                                if app.player.is_playing() {
+                                    app.player.restart_capture();
+                                }
+                            }
+                            app.save_config();
                         } else if app.keybindings.search.matches(kc) {
                             app.search_query.clear();
                             app.input_mode = InputMode::Editing;
@@ -387,14 +407,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             poll_us = poll_start.elapsed().as_micros() as u64;
 
             let vis_start = Instant::now();
-            if app.player.has_real_audio() {
-                let used_real = app.visualizer.tick_real(&app.analysis, app.volume);
-                if !used_real {
-                    app.visualizer.tick_simulated(app.player.is_playing(), app.player.audio_level, app.volume);
+            if app.visualizer_enabled {
+                if app.player.has_real_audio() {
+                    let used_real = app.visualizer.tick_real(&app.analysis, app.volume);
+                    if !used_real {
+                        app.visualizer.tick_simulated(app.player.is_playing(), app.player.audio_level, app.volume);
+                    }
+                } else {
+                    let level = app.player.audio_level;
+                    app.visualizer.tick_simulated(app.player.is_playing(), level, app.volume);
                 }
-            } else {
-                let level = app.player.audio_level;
-                app.visualizer.tick_simulated(app.player.is_playing(), level, app.volume);
             }
             vis_us = vis_start.elapsed().as_micros() as u64;
 

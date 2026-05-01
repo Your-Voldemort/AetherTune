@@ -90,6 +90,8 @@ pub struct Player {
     has_parec: bool,
     /// Real-time stream information from mpv
     pub stream_info: StreamInfo,
+    /// Whether the visualizer is enabled (controls capture startup)
+    pub visualizer_enabled: bool,
 }
 
 impl Player {
@@ -123,6 +125,7 @@ impl Player {
             #[cfg(unix)]
             has_parec,
             stream_info: StreamInfo::new(),
+            visualizer_enabled: true,
         }
     }
 
@@ -164,9 +167,9 @@ impl Player {
                     std::thread::sleep(std::time::Duration::from_millis(400));
                     self.connect_ipc();
 
-                    // Start audio capture for visualization if parec is available
+                    // Start audio capture for visualization if parec is available and visualizer is on
                     #[cfg(unix)]
-                    if self.has_parec {
+                    if self.has_parec && self.visualizer_enabled {
                         self.start_capture();
                     }
                 }
@@ -257,6 +260,26 @@ impl Player {
     #[cfg(windows)]
     fn stop_capture(&mut self) {
         // No capture on Windows yet
+    }
+
+    /// Stop audio capture if it's currently running (called when visualizer is disabled)
+    pub fn stop_capture_if_running(&mut self) {
+        #[cfg(unix)]
+        {
+            if self.capture.is_some() {
+                self.stop_capture();
+            }
+        }
+    }
+
+    /// Restart audio capture (called when visualizer is re-enabled while playing)
+    pub fn restart_capture(&mut self) {
+        #[cfg(unix)]
+        {
+            if self.has_parec && self.capture.is_none() && self.process.is_some() {
+                self.start_capture();
+            }
+        }
     }
 
     #[cfg(unix)]

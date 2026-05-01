@@ -46,6 +46,7 @@ pub struct KeyBindings {
     pub genre_prev: KeyBinding,
     pub genre_picker: KeyBinding,
     pub theme_picker: KeyBinding,
+    pub visualizer_toggle: KeyBinding,
     pub help: KeyBinding,
     pub perf_toggle: KeyBinding,
     pub perf_tick_slower: KeyBinding,
@@ -73,6 +74,7 @@ impl KeyBindings {
             ("genre_prev",       "Previous Genre",      &self.genre_prev),
             ("genre_picker",     "Genre Picker",        &self.genre_picker),
             ("theme_picker",     "Theme Picker",        &self.theme_picker),
+            ("visualizer_toggle","Toggle Visualizer",   &self.visualizer_toggle),
             ("help",             "Help Overlay",        &self.help),
             ("perf_toggle",      "Perf Profiler",       &self.perf_toggle),
             ("perf_tick_slower",  "Tick Rate Slower",   &self.perf_tick_slower),
@@ -100,6 +102,7 @@ impl KeyBindings {
             "genre_prev"       => &mut self.genre_prev,
             "genre_picker"     => &mut self.genre_picker,
             "theme_picker"     => &mut self.theme_picker,
+            "visualizer_toggle" => &mut self.visualizer_toggle,
             "help"             => &mut self.help,
             "perf_toggle"      => &mut self.perf_toggle,
             "perf_tick_slower"  => &mut self.perf_tick_slower,
@@ -136,6 +139,7 @@ impl Default for KeyBindings {
             genre_prev:       KeyBinding::new(KeyCode::Char('[')),
             genre_picker:     KeyBinding::new(KeyCode::Char('g')),
             theme_picker:     KeyBinding::new(KeyCode::Char('t')),
+            visualizer_toggle: KeyBinding::new(KeyCode::Char('v')),
             help:             KeyBinding::new(KeyCode::Char('?')),
             perf_toggle:      KeyBinding::new(KeyCode::Char('`')),
             perf_tick_slower:  KeyBinding::with_alt(KeyCode::Char('<'), KeyCode::Char(',')),
@@ -217,6 +221,8 @@ pub struct Config {
     pub keybindings: KeyBindings,
     /// Theme name (e.g. "CRT", "Gruvbox", "Nord")
     pub theme: String,
+    /// Whether the visualizer is enabled (default: true)
+    pub visualizer_enabled: bool,
     path: PathBuf,
 }
 
@@ -247,7 +253,9 @@ impl Config {
                 let keybindings = Self::load_keybindings(&contents);
                 let theme = Self::extract_string(&contents, "theme")
                     .unwrap_or_else(|| "CRT".to_string());
-                return Self { tick_rate_ms, volume, country_code, keybindings, theme, path };
+                let visualizer_enabled = Self::extract_bool(&contents, "visualizer_enabled")
+                    .unwrap_or(true);
+                return Self { tick_rate_ms, volume, country_code, keybindings, theme, visualizer_enabled, path };
             }
         }
         Self {
@@ -256,6 +264,7 @@ impl Config {
             country_code: String::new(),
             keybindings: KeyBindings::default(),
             theme: "CRT".to_string(),
+            visualizer_enabled: true,
             path,
         }
     }
@@ -306,8 +315,8 @@ impl Config {
         let theme_escaped = self.theme.replace('\\', "\\\\").replace('"', "\\\"");
 
         let json = format!(
-            "{{\n  \"tick_rate_ms\": {},\n  \"volume\": {},\n  \"country_code\": \"{}\",\n  \"theme\": \"{}\",\n    \"keybindings\": {}\n}}",
-            self.tick_rate_ms, self.volume, cc_escaped, theme_escaped, kb_json
+            "{{\n  \"tick_rate_ms\": {},\n  \"volume\": {},\n  \"country_code\": \"{}\",\n  \"theme\": \"{}\",\n  \"visualizer_enabled\": {},\n    \"keybindings\": {}\n}}",
+            self.tick_rate_ms, self.volume, cc_escaped, theme_escaped, self.visualizer_enabled, kb_json
         );
         let _ = fs::write(&self.path, json);
     }
@@ -425,6 +434,19 @@ impl Config {
             }
         }
         None
+    }
+
+    fn extract_bool(json: &str, key: &str) -> Option<bool> {
+        let pattern = format!("\"{}\":", key);
+        let idx = json.find(&pattern)?;
+        let after = json[idx + pattern.len()..].trim_start();
+        if after.starts_with("true") {
+            Some(true)
+        } else if after.starts_with("false") {
+            Some(false)
+        } else {
+            None
+        }
     }
 }
 

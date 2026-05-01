@@ -19,7 +19,7 @@ const COL_PRIMARY: usize = 8;
 
 pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let popup_w: u16 = 48;
-    let popup_h: u16 = 35;
+    let popup_h: u16 = 36;
     let x = area.x + area.width.saturating_sub(popup_w) / 2;
     let y = area.y + area.height.saturating_sub(popup_h) / 2;
     let popup = Rect::new(x, y, popup_w.min(area.width), popup_h.min(area.height));

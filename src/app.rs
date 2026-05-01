@@ -431,6 +431,8 @@ pub struct App {
     pub theme: crate::ui::themes::Theme,
     /// Currently selected index in the theme picker overlay
     pub theme_selected: usize,
+    /// Whether the visualizer is enabled (can be toggled at runtime)
+    pub visualizer_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -478,10 +480,13 @@ impl App {
         let has_more = stations.len() as u32 >= 30;
         let analysis = audio_pipe::new_shared_analysis();
         let config = Config::load();
+        let mut player = Player::new(analysis.clone());
+        player.visualizer_enabled = config.visualizer_enabled;
+
         Self {
             stations,
             selected_index: 0,
-            player: Player::new(analysis.clone()),
+            player,
             volume: config.volume,
             search_query: String::new(),
             input_mode: InputMode::Normal,
@@ -531,6 +536,7 @@ impl App {
                 let all = crate::ui::themes::Theme::all();
                 all.iter().position(|t| t.name.eq_ignore_ascii_case(&config.theme)).unwrap_or(0)
             },
+            visualizer_enabled: config.visualizer_enabled,
         }
     }
 
@@ -719,10 +725,15 @@ impl App {
     /// Persist current tick rate, volume, and keybindings to config file
     pub fn save_config(&self) {
         let mut config = Config::load();
-        config.tick_rate_ms = self.tick_rate_ms;
+        // Only save tick_rate_ms when visualizer is enabled — otherwise we'd
+        // overwrite the user's preference with the low-power 200ms value
+        if self.visualizer_enabled {
+            config.tick_rate_ms = self.tick_rate_ms;
+        }
         config.volume = self.volume;
         config.keybindings = self.keybindings.clone();
         config.theme = self.theme.name.to_string();
+        config.visualizer_enabled = self.visualizer_enabled;
         config.save();
     }
 

@@ -52,6 +52,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         let help_key = keycode_to_string(app.keybindings.help.primary);
         let settings_key = keycode_to_string(app.keybindings.settings.primary);
 
+        let vis_key = keycode_to_string(app.keybindings.visualizer_toggle.primary);
+        let vis_status = if app.visualizer_enabled {
+            String::new()
+        } else {
+            format!("  │  vis: off ({})", vis_key)
+        };
+
         let line = Line::from(vec![
             Span::styled(" ", Style::default()),
             playing_indicator,
@@ -60,8 +67,12 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(app.theme.accent),
             ),
             Span::styled(
-                format!("  │  {} search  │  {} genre  │  {} theme  │  {} help  │  {} settings", search_key, genre_key, theme_key, help_key, settings_key),
+                format!("  │  {} search  │  {} genre  │  {} theme  │  {} help  │  {} settings  │  {} vizualizer toggle", search_key, genre_key, theme_key, help_key, settings_key, vis_key),
                 Style::default().fg(Color::Rgb(80, 80, 110)),
+            ),
+            Span::styled(
+                vis_status.clone(),
+                Style::default().fg(app.theme.text_warn),
             ),
         ]);
 
