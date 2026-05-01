@@ -47,7 +47,7 @@
 // ──────────────────────────────────────────────────────────────────────
 
 use crate::app::App;
-use super::helpers::*;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -56,12 +56,12 @@ use ratatui::{
     layout::Rect,
 };
 
-pub fn draw(f: &mut Frame, _app: &App, area: Rect) {
+pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     // Source tabs
     let radio_tab = Span::styled(
         " ● Radio ",
         Style::default()
-            .fg(NEON_GREEN)
+            .fg(app.theme.positive)
             .add_modifier(Modifier::BOLD),
     );
     let subsonic_tab = Span::styled(
@@ -88,7 +88,7 @@ pub fn draw(f: &mut Frame, _app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(60, 60, 100)))
         .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(PANEL_BG));
+        .style(Style::default().bg(app.theme.bg_panel));
 
     let inner = block.inner(area);
     f.render_widget(block, area);

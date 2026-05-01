@@ -11,10 +11,11 @@ pub mod shutdown;
 pub mod song_log;
 pub mod station_list;
 pub mod stream_info;
+pub mod themes;
+pub mod theme_picker;
 pub mod visualizer;
 
 use crate::app::{App, Overlay};
-use helpers::DARK_BG;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
@@ -25,9 +26,9 @@ use ratatui::{
 pub fn draw(f: &mut Frame, app: &App) {
     let size = f.size();
 
-    // Fill background
+    // Fill background with theme color
     f.render_widget(
-        Block::default().style(Style::default().bg(DARK_BG)),
+        Block::default().style(Style::default().bg(app.theme.bg_dark)),
         size,
     );
 
@@ -49,6 +50,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Overlay::StationDetail => overlays::draw_detail(f, app, size),
         Overlay::Settings => settings::draw(f, app, size),
         Overlay::GenrePicker => genre_picker::draw(f, app, size),
+        Overlay::ThemePicker => theme_picker::draw(f, app, size),
         Overlay::None => {}
     }
 

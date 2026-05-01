@@ -45,6 +45,7 @@ pub struct KeyBindings {
     pub genre_next: KeyBinding,
     pub genre_prev: KeyBinding,
     pub genre_picker: KeyBinding,
+    pub theme_picker: KeyBinding,
     pub help: KeyBinding,
     pub perf_toggle: KeyBinding,
     pub perf_tick_slower: KeyBinding,
@@ -71,6 +72,7 @@ impl KeyBindings {
             ("genre_next",       "Next Genre",          &self.genre_next),
             ("genre_prev",       "Previous Genre",      &self.genre_prev),
             ("genre_picker",     "Genre Picker",        &self.genre_picker),
+            ("theme_picker",     "Theme Picker",        &self.theme_picker),
             ("help",             "Help Overlay",        &self.help),
             ("perf_toggle",      "Perf Profiler",       &self.perf_toggle),
             ("perf_tick_slower",  "Tick Rate Slower",   &self.perf_tick_slower),
@@ -97,6 +99,7 @@ impl KeyBindings {
             "genre_next"       => &mut self.genre_next,
             "genre_prev"       => &mut self.genre_prev,
             "genre_picker"     => &mut self.genre_picker,
+            "theme_picker"     => &mut self.theme_picker,
             "help"             => &mut self.help,
             "perf_toggle"      => &mut self.perf_toggle,
             "perf_tick_slower"  => &mut self.perf_tick_slower,
@@ -132,6 +135,7 @@ impl Default for KeyBindings {
             genre_next:       KeyBinding::new(KeyCode::Char(']')),
             genre_prev:       KeyBinding::new(KeyCode::Char('[')),
             genre_picker:     KeyBinding::new(KeyCode::Char('g')),
+            theme_picker:     KeyBinding::new(KeyCode::Char('t')),
             help:             KeyBinding::new(KeyCode::Char('?')),
             perf_toggle:      KeyBinding::new(KeyCode::Char('`')),
             perf_tick_slower:  KeyBinding::with_alt(KeyCode::Char('<'), KeyCode::Char(',')),
@@ -211,6 +215,8 @@ pub struct Config {
     /// Empty string means no local blending (global results only).
     pub country_code: String,
     pub keybindings: KeyBindings,
+    /// Theme name (e.g. "CRT", "Gruvbox", "Nord")
+    pub theme: String,
     path: PathBuf,
 }
 
@@ -239,7 +245,9 @@ impl Config {
                 let country_code = Self::extract_string(&contents, "country_code")
                     .unwrap_or_default();
                 let keybindings = Self::load_keybindings(&contents);
-                return Self { tick_rate_ms, volume, country_code, keybindings, path };
+                let theme = Self::extract_string(&contents, "theme")
+                    .unwrap_or_else(|| "CRT".to_string());
+                return Self { tick_rate_ms, volume, country_code, keybindings, theme, path };
             }
         }
         Self {
@@ -247,6 +255,7 @@ impl Config {
             volume: DEFAULT_VOLUME,
             country_code: String::new(),
             keybindings: KeyBindings::default(),
+            theme: "CRT".to_string(),
             path,
         }
     }
@@ -294,9 +303,11 @@ impl Config {
             format!("{{\n{}\n    }}", kb_lines.join(",\n"))
         };
 
+        let theme_escaped = self.theme.replace('\\', "\\\\").replace('"', "\\\"");
+
         let json = format!(
-            "{{\n  \"tick_rate_ms\": {},\n  \"volume\": {},\n  \"country_code\": \"{}\",\n    \"keybindings\": {}\n}}",
-            self.tick_rate_ms, self.volume, cc_escaped, kb_json
+            "{{\n  \"tick_rate_ms\": {},\n  \"volume\": {},\n  \"country_code\": \"{}\",\n  \"theme\": \"{}\",\n    \"keybindings\": {}\n}}",
+            self.tick_rate_ms, self.volume, cc_escaped, theme_escaped, kb_json
         );
         let _ = fs::write(&self.path, json);
     }

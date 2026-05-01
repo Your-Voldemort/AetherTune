@@ -1,5 +1,5 @@
 use crate::app::App;
-use super::helpers::*;
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -20,7 +20,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(60, 60, 100)))
         .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(PANEL_BG));
+        .style(Style::default().bg(app.theme.bg_panel));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -32,7 +32,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Volume is always shown
-    lines.push(volume_compact(app.volume));
+    lines.push(volume_compact(app.volume, &app.theme));
 
     if !app.player.is_playing() {
         // Only show as many lines as we have room
@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
 
     // Connection uptime
     let uptime = si.uptime_str();
-    lines.push(compact_line("Uptime", &uptime, NEON_GREEN));
+    lines.push(compact_line("Uptime", &uptime, app.theme.positive));
 
     // Audio bitrate (actual from mpv vs advertised)
     if si.audio_bitrate > 0.0 {
@@ -66,14 +66,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         let color = if advertised > 0 {
             let ratio = actual_kbps / advertised as f64;
             if ratio > 0.85 {
-                NEON_GREEN
+                app.theme.positive
             } else if ratio > 0.5 {
-                YELLOW
+                app.theme.text_warn
             } else {
-                RED
+                app.theme.text_error
             }
         } else {
-            CYAN
+            app.theme.accent
         };
         lines.push(compact_line("Bitrate", &bitrate_str, color));
     } else {
@@ -102,17 +102,17 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "—".to_string()
     };
-    lines.push(compact_line("Format", &audio_fmt, CYAN));
+    lines.push(compact_line("Format", &audio_fmt, app.theme.accent));
 
     // Buffer health
     if si.cache_duration > 0.0 {
         let buf_str = format!("{:.1}s", si.cache_duration);
         let color = if si.cache_duration > 5.0 {
-            NEON_GREEN
+            app.theme.positive
         } else if si.cache_duration > 2.0 {
-            YELLOW
+            app.theme.text_warn
         } else {
-            RED
+            app.theme.text_error
         };
 
         // Simple visual bar for buffer
@@ -138,15 +138,15 @@ fn compact_line(label: &str, value: &str, color: Color) -> Line<'static> {
     ])
 }
 
-fn volume_compact(volume: u32) -> Line<'static> {
+fn volume_compact(volume: u32, theme: &crate::ui::themes::Theme) -> Line<'static> {
     let filled = (volume as usize * 10) / 100;
     let empty = 10 - filled;
     let bar_color = if volume > 80 {
-        RED
+        theme.text_error
     } else if volume > 50 {
-        YELLOW
+        theme.text_warn
     } else {
-        NEON_GREEN
+        theme.positive
     };
 
     Line::from(vec![

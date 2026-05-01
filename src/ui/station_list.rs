@@ -1,5 +1,5 @@
 use crate::app::{ActivePanel, App};
-use super::helpers::*;
+use super::helpers::truncate_str;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -28,11 +28,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                     let prefix = if playing_marker { "♪ " } else { "  " };
 
                     let line = Line::from(vec![
-                        Span::styled(fav_marker, Style::default().fg(YELLOW)),
-                        Span::styled(prefix, Style::default().fg(NEON_GREEN)),
+                        Span::styled(fav_marker, Style::default().fg(app.theme.text_warn)),
+                        Span::styled(prefix, Style::default().fg(app.theme.positive)),
                         Span::styled(
                             truncate_str(&s.name, name_budget),
-                            Style::default().fg(DIM_WHITE),
+                            Style::default().fg(app.theme.text_muted),
                         ),
                     ]);
                     ListItem::new(line)
@@ -64,11 +64,11 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                     let prefix = if playing { "♪ " } else { "  " };
 
                     let line = Line::from(vec![
-                        Span::styled("★ ", Style::default().fg(YELLOW)),
-                        Span::styled(prefix, Style::default().fg(NEON_GREEN)),
+                        Span::styled("★ ", Style::default().fg(app.theme.text_warn)),
+                        Span::styled(prefix, Style::default().fg(app.theme.positive)),
                         Span::styled(
                             truncate_str(&fav.name, name_budget),
-                            Style::default().fg(DIM_WHITE),
+                            Style::default().fg(app.theme.text_muted),
                         ),
                         Span::styled(
                             format!(" │ {}", truncate_str(&fav.genre, 15)),
@@ -95,7 +95,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                         Span::styled("  ", Style::default()),
                         Span::styled(
                             truncate_str(&h.name, name_budget),
-                            Style::default().fg(DIM_WHITE),
+                            Style::default().fg(app.theme.text_muted),
                         ),
                         Span::styled(
                             format!(" │ {}", time_str),
@@ -114,9 +114,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let border_color = match app.active_panel {
-        ActivePanel::Stations => CYAN,
-        ActivePanel::Favorites => YELLOW,
-        ActivePanel::History => MAGENTA,
+        ActivePanel::Stations => app.theme.accent,
+        ActivePanel::Favorites => app.theme.text_warn,
+        ActivePanel::History => app.theme.secondary,
     };
 
     let block = Block::default()
@@ -127,13 +127,13 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(PANEL_BG));
+        .style(Style::default().bg(app.theme.bg_panel));
 
     let list = List::new(items)
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(HIGHLIGHT_BG)
+                .bg(app.theme.bg_highlight)
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )

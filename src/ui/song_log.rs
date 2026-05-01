@@ -1,5 +1,5 @@
 use crate::app::App;
-use super::helpers::*;
+use super::helpers::truncate_str;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -27,7 +27,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::Rgb(60, 60, 100)))
         .padding(Padding::new(1, 1, 0, 0))
-        .style(Style::default().bg(PANEL_BG));
+        .style(Style::default().bg(app.theme.bg_panel));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -57,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
             let is_current = i == 0;
             let time_style = Style::default().fg(Color::Rgb(80, 80, 110));
             let title_style = if is_current {
-                Style::default().fg(YELLOW)
+                Style::default().fg(app.theme.text_warn)
             } else {
                 Style::default().fg(Color::Rgb(140, 140, 160))
             };
@@ -82,7 +82,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(format!("{} ", entry.timestamp), time_style),
                 Span::styled(
                     indicator,
-                    Style::default().fg(if is_current { NEON_GREEN } else { Color::Rgb(40, 40, 60) }),
+                    Style::default().fg(if is_current { app.theme.positive } else { Color::Rgb(40, 40, 60) }),
                 ),
                 Span::styled(display_title, title_style),
                 Span::styled(
