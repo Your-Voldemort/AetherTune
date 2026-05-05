@@ -57,13 +57,6 @@ jobs:
         with:
           name: macos-${{ matrix.arch }}
           path: AetherTune-*.tar.gz
-
-      - name: Upload SHA
-        uses: actions/upload-artifact@v6
-        with:
-          name: sha-macos-${{ matrix.arch }}
-          path: /dev/null
-        # We pass SHA via a file artifact instead since matrix jobs can't directly set workflow outputs
         
       - name: Save SHA to file
         run: |
