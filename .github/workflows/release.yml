@@ -22,7 +22,6 @@ jobs:
     name: Create GitHub Release
     needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
-
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v7
@@ -55,10 +54,12 @@ jobs:
     secrets: inherit
 
   brew:
-    needs: [build-linux, release]
+    needs: [build-linux, build-macos, release]
     uses: ./.github/workflows/publish-brew.yml
     with:
       version: ${{ needs.build-linux.outputs.version }}
       tag: ${{ needs.build-linux.outputs.tag }}
-      sha256: ${{ needs.build-linux.outputs.sha256 }}
+      sha256_linux_x86_64: ${{ needs.build-linux.outputs.sha256 }}
+      sha256_macos_x86_64: ${{ needs.build-macos.outputs.sha256_x86_64 }}
+      sha256_macos_aarch64: ${{ needs.build-macos.outputs.sha256_aarch64 }}
     secrets: inherit

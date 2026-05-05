@@ -2,6 +2,13 @@ name: Build macOS
 
 on:
   workflow_call:
+    outputs:
+      sha256_x86_64:
+        description: "SHA256 of the macOS x86_64 tarball"
+        value: ${{ jobs.collect.outputs.sha256_x86_64 }}
+      sha256_aarch64:
+        description: "SHA256 of the macOS aarch64 tarball"
+        value: ${{ jobs.collect.outputs.sha256_aarch64 }}
 
 jobs:
   build:
@@ -37,8 +44,55 @@ jobs:
           cp README.md LICENSE "AetherTune-${TAG}-macos-${{ matrix.arch }}/"
           tar czf "AetherTune-${TAG}-macos-${{ matrix.arch }}.tar.gz" "AetherTune-${TAG}-macos-${{ matrix.arch }}"
 
+      - name: Compute SHA256
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          SHA=$(shasum -a 256 "AetherTune-${TAG}-macos-${{ matrix.arch }}.tar.gz" | awk '{print $1}')
+          echo "sha256=${SHA}" >> $GITHUB_OUTPUT
+          echo "arch=${{ matrix.arch }}" >> $GITHUB_OUTPUT
+        id: sha
+
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: macos-${{ matrix.arch }}
           path: AetherTune-*.tar.gz
+
+      - name: Upload SHA
+        uses: actions/upload-artifact@v6
+        with:
+          name: sha-macos-${{ matrix.arch }}
+          path: /dev/null
+        # We pass SHA via a file artifact instead since matrix jobs can't directly set workflow outputs
+        
+      - name: Save SHA to file
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          SHA=$(shasum -a 256 "AetherTune-${TAG}-macos-${{ matrix.arch }}.tar.gz" | awk '{print $1}')
+          echo "$SHA" > sha256-macos-${{ matrix.arch }}.txt
+
+      - name: Upload SHA file
+        uses: actions/upload-artifact@v6
+        with:
+          name: sha-macos-${{ matrix.arch }}
+          path: sha256-macos-${{ matrix.arch }}.txt
+
+  collect:
+    name: Collect macOS SHAs
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      sha256_x86_64: ${{ steps.read.outputs.sha256_x86_64 }}
+      sha256_aarch64: ${{ steps.read.outputs.sha256_aarch64 }}
+    steps:
+      - name: Download SHA files
+        uses: actions/download-artifact@v7
+        with:
+          pattern: sha-macos-*
+          merge-multiple: true
+
+      - name: Read SHAs
+        id: read
+        run: |
+          echo "sha256_x86_64=$(cat sha256-macos-x86_64.txt)" >> $GITHUB_OUTPUT
+          echo "sha256_aarch64=$(cat sha256-macos-aarch64.txt)" >> $GITHUB_OUTPUT

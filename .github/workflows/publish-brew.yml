@@ -9,7 +9,13 @@ on:
       tag:
         required: true
         type: string
-      sha256:
+      sha256_linux_x86_64:
+        required: true
+        type: string
+      sha256_macos_x86_64:
+        required: true
+        type: string
+      sha256_macos_aarch64:
         required: true
         type: string
     secrets:
@@ -29,21 +35,40 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           TAG="${{ inputs.tag }}"
-          SHA256="${{ inputs.sha256 }}"
+          SHA256_LINUX_X86_64="${{ inputs.sha256_linux_x86_64 }}"
+          SHA256_MACOS_X86_64="${{ inputs.sha256_macos_x86_64 }}"
+          SHA256_MACOS_AARCH64="${{ inputs.sha256_macos_aarch64 }}"
+          BASE_URL="https://github.com/nevermore23274/AetherTune/releases/download/${TAG}"
 
           mkdir -p tap
           cd tap
           git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nevermore23274/homebrew-aethertune.git .
           mkdir -p Formula
 
-          cat > Formula/aethertune.rb <<'FORMULA'
+          cat > Formula/aethertune.rb << FORMULA
           class Aethertune < Formula
             desc "Terminal-based internet radio player with real-time audio visualization, built in Rust"
             homepage "https://github.com/nevermore23274/AetherTune"
-            url "RELEASE_URL"
-            sha256 "RELEASE_SHA256"
             license "MIT"
-            version "RELEASE_VERSION"
+            version "${VERSION}"
+
+            on_macos do
+              on_arm do
+                url "${BASE_URL}/AetherTune-${TAG}-macos-aarch64.tar.gz"
+                sha256 "${SHA256_MACOS_AARCH64}"
+              end
+              on_intel do
+                url "${BASE_URL}/AetherTune-${TAG}-macos-x86_64.tar.gz"
+                sha256 "${SHA256_MACOS_X86_64}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "${BASE_URL}/AetherTune-${TAG}-linux-x86_64.tar.gz"
+                sha256 "${SHA256_LINUX_X86_64}"
+              end
+            end
 
             depends_on "mpv"
 
@@ -66,9 +91,6 @@ jobs:
           FORMULA
 
           sed -i 's/^          //' Formula/aethertune.rb
-          sed -i "s|RELEASE_URL|https://github.com/nevermore23274/AetherTune/releases/download/${TAG}/AetherTune-${TAG}-linux-x86_64.tar.gz|" Formula/aethertune.rb
-          sed -i "s|RELEASE_SHA256|${SHA256}|" Formula/aethertune.rb
-          sed -i "s|RELEASE_VERSION|${VERSION}|" Formula/aethertune.rb
 
           git config user.name "sineyed"
           git config user.email "sineyed@users.noreply.github.com"
