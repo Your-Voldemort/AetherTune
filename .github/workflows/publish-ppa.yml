@@ -92,9 +92,26 @@ jobs:
               dpkg-buildpackage -S -sd -d -k"${GPG_FINGERPRINT}"
             fi
 
-            # Upload to PPA
+            # Upload to PPA. Launchpad's FTP upload endpoint occasionally
+            # returns a transient error (e.g. "550 ... internal server
+            # error") that has nothing to do with the package itself —
+            # retry a few times with a short backoff before giving up, so
+            # a one-off Launchpad hiccup doesn't require a manual re-run.
             cd "${WORKDIR}"
-            dput ppa:patchgoblin/aethertune "aethertune_${VERSION}-ppa${{ github.run_number }}~${SERIES}_source.changes"
+            CHANGES_FILE="aethertune_${VERSION}-ppa${{ github.run_number }}~${SERIES}_source.changes"
+            UPLOAD_OK=false
+            for ATTEMPT in 1 2 3; do
+              if dput ppa:patchgoblin/aethertune "${CHANGES_FILE}"; then
+                UPLOAD_OK=true
+                break
+              fi
+              echo "dput attempt ${ATTEMPT}/3 failed for ${SERIES}; retrying in 30s..."
+              sleep 30
+            done
+            if [ "$UPLOAD_OK" != true ]; then
+              echo "::error::dput failed for ${SERIES} after 3 attempts"
+              exit 1
+            fi
 
             cd "${STARTDIR}"
           done
