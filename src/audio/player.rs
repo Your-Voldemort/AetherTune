@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::Arc;
 
+#[cfg(windows)]
+use std::io::Write as _;
+
 pub struct StreamInfo {
     /// Actual audio bitrate in bits/sec from mpv (0 if unknown)
     pub audio_bitrate: f64,
@@ -96,6 +99,17 @@ pub struct Player {
     /// Job Object that ensures mpv.exe dies when AetherTune exits (Windows only)
     #[cfg(windows)]
     job_object: Option<crate::audio::jobobject::JobObject>,
+    /// Named pipe path passed to mpv's --input-ipc-server (Windows only).
+    /// mpv speaks the same JSON IPC protocol over a named pipe here as it
+    /// does over a Unix socket on Linux/macOS.
+    #[cfg(windows)]
+    pipe_name: String,
+    /// Write handle to the connected named pipe (Windows only). Write-only:
+    /// this is enough to push commands like set_property volume; it does
+    /// not read mpv's replies, so title/stream-info polling still doesn't
+    /// populate on Windows (pre-existing limitation, unrelated to volume).
+    #[cfg(windows)]
+    pipe: Option<std::fs::File>,
     socket_path: PathBuf,
     /// IPC stream to mpv (Unix socket on Linux and macOS) — used for writing commands
     #[cfg(unix)]
@@ -165,6 +179,10 @@ impl Player {
             capture_stop: Arc::new(AtomicBool::new(false)),
             #[cfg(windows)]
             job_object: crate::audio::jobobject::JobObject::new(),
+            #[cfg(windows)]
+            pipe_name: format!(r"\\.\pipe\aethertune-mpv-{}", std::process::id()),
+            #[cfg(windows)]
+            pipe: None,
             socket_path,
             #[cfg(unix)]
             stream: None,
@@ -212,6 +230,13 @@ impl Player {
             cmd.arg(format!("--input-ipc-server={}", socket_str));
         }
 
+        // On Windows, mpv speaks the same JSON IPC protocol over a named
+        // pipe instead of a Unix socket.
+        #[cfg(windows)]
+        {
+            cmd.arg(format!("--input-ipc-server={}", self.pipe_name));
+        }
+
         match cmd.spawn() {
             Ok(c) => {
                 // On Windows, assign mpv to the Job Object so it dies with us
@@ -248,9 +273,13 @@ impl Player {
                     }
                 }
 
-                // On Windows, start WASAPI loopback capture if visualizer is enabled
+                // On Windows, connect to mpv's named-pipe IPC so volume
+                // commands (and any future commands) actually reach it,
+                // then start WASAPI loopback capture if visualizer is enabled
                 #[cfg(windows)]
                 {
+                    self.connect_pipe();
+
                     if self.visualizer_enabled {
                         self.start_capture();
                     }
@@ -458,9 +487,36 @@ impl Player {
         }
     }
 
+    /// Connect to the named pipe mpv creates for --input-ipc-server. mpv
+    /// creates the pipe server asynchronously after startup, so — same as
+    /// connect_ipc() on Unix — retry briefly rather than assuming it's
+    /// ready immediately. ERROR_FILE_NOT_FOUND / ERROR_PIPE_BUSY show up
+    /// as an Err here before the server side exists yet.
     #[cfg(windows)]
-    fn send_command(&mut self, _command: &str) {
-        // No IPC on Windows yet
+    fn connect_pipe(&mut self) {
+        use std::fs::OpenOptions;
+
+        for _ in 0..30 {
+            match OpenOptions::new().write(true).open(&self.pipe_name) {
+                Ok(file) => {
+                    self.pipe = Some(file);
+                    return;
+                }
+                Err(_) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn send_command(&mut self, command: &str) {
+        if let Some(ref mut pipe) = self.pipe {
+            let msg = format!("{}\n", command);
+            if pipe.write_all(msg.as_bytes()).is_err() {
+                self.pipe = None;
+            }
+        }
     }
 
     pub fn set_volume(&mut self, volume: u32) {
@@ -670,6 +726,11 @@ impl Player {
             self.stream = None;
             self.reader = None;
             self.line_buf.clear();
+        }
+
+        #[cfg(windows)]
+        {
+            self.pipe = None;
         }
 
         // Stop audio capture first
