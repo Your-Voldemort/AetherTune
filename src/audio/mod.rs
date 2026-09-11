@@ -1,6 +1,7 @@
 pub mod seqlock;
 pub mod fft;
 pub mod pipe;
+pub mod mpv_ipc;
 pub mod player;
 pub mod visualizer;
 

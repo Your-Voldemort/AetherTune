@@ -1,4 +1,4 @@
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
@@ -17,60 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[cfg(windows)]
-use std::io::Write as _;
+use std::sync::mpsc;
 
-pub struct StreamInfo {
-    /// Actual audio bitrate in bits/sec from mpv (0 if unknown)
-    pub audio_bitrate: f64,
-    /// Audio codec name reported by mpv
-    pub audio_codec: String,
-    /// Demuxer cache duration in seconds (how much audio is buffered)
-    pub cache_duration: f64,
-    /// How long the current stream has been connected
-    pub stream_connected_at: Option<std::time::Instant>,
-    /// Audio sample rate from mpv
-    pub sample_rate: u32,
-    /// Audio channel count
-    pub channels: u32,
-}
-
-impl StreamInfo {
-    pub fn new() -> Self {
-        Self {
-            audio_bitrate: 0.0,
-            audio_codec: String::new(),
-            cache_duration: 0.0,
-            stream_connected_at: None,
-            sample_rate: 0,
-            channels: 0,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.audio_bitrate = 0.0;
-        self.audio_codec.clear();
-        self.cache_duration = 0.0;
-        self.stream_connected_at = None;
-        self.sample_rate = 0;
-        self.channels = 0;
-    }
-
-    pub fn uptime_str(&self) -> String {
-        match self.stream_connected_at {
-            Some(t) => {
-                let secs = t.elapsed().as_secs();
-                if secs >= 3600 {
-                    format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
-                } else if secs >= 60 {
-                    format!("{}m {}s", secs / 60, secs % 60)
-                } else {
-                    format!("{}s", secs)
-                }
-            }
-            None => "—".to_string(),
-        }
-    }
-}
+use crate::audio::mpv_ipc::{self, StreamInfo};
 
 pub struct Player {
     /// mpv process for actual audio playback
@@ -104,12 +53,20 @@ pub struct Player {
     /// does over a Unix socket on Linux/macOS.
     #[cfg(windows)]
     pipe_name: String,
-    /// Write handle to the connected named pipe (Windows only). Write-only:
-    /// this is enough to push commands like set_property volume; it does
-    /// not read mpv's replies, so title/stream-info polling still doesn't
-    /// populate on Windows (pre-existing limitation, unrelated to volume).
+    /// Write handle to the connected named pipe (Windows only).
     #[cfg(windows)]
     pipe: Option<std::fs::File>,
+    /// Background thread doing a blocking read_line() loop over its own
+    /// cloned handle to the pipe (Windows only). Named pipes opened via
+    /// std::fs::File have no non-blocking read mode without dropping into
+    /// overlapped I/O, so — same idiom as the parec/WASAPI capture threads
+    /// elsewhere in this file — a dedicated thread does the blocking work
+    /// and hands completed lines back over a channel.
+    #[cfg(windows)]
+    pipe_reader_handle: Option<std::thread::JoinHandle<()>>,
+    /// Receiving end of that channel; poll() drains it non-blockingly.
+    #[cfg(windows)]
+    pipe_rx: Option<mpsc::Receiver<String>>,
     socket_path: PathBuf,
     /// IPC stream to mpv (Unix socket on Linux and macOS) — used for writing commands
     #[cfg(unix)]
@@ -183,6 +140,10 @@ impl Player {
             pipe_name: format!(r"\\.\pipe\aethertune-mpv-{}", std::process::id()),
             #[cfg(windows)]
             pipe: None,
+            #[cfg(windows)]
+            pipe_reader_handle: None,
+            #[cfg(windows)]
+            pipe_rx: None,
             socket_path,
             #[cfg(unix)]
             stream: None,
@@ -273,9 +234,9 @@ impl Player {
                     }
                 }
 
-                // On Windows, connect to mpv's named-pipe IPC so volume
-                // commands (and any future commands) actually reach it,
-                // then start WASAPI loopback capture if visualizer is enabled
+                // On Windows, connect to mpv's named-pipe IPC (so volume
+                // control and title/stream-info polling reach mpv), then
+                // start WASAPI loopback capture if visualizer is enabled
                 #[cfg(windows)]
                 {
                     self.connect_pipe();
@@ -497,9 +458,46 @@ impl Player {
         use std::fs::OpenOptions;
 
         for _ in 0..30 {
-            match OpenOptions::new().write(true).open(&self.pipe_name) {
+            match OpenOptions::new().read(true).write(true).open(&self.pipe_name) {
                 Ok(file) => {
+                    // Named pipes have no non-blocking read without
+                    // overlapped I/O, so a background thread does a
+                    // blocking read_line() loop over its own cloned
+                    // handle and forwards completed lines through a
+                    // channel; poll() drains that channel non-blockingly,
+                    // same shape as the Unix socket path.
+                    if let Ok(read_handle) = file.try_clone() {
+                        let (tx, rx) = mpsc::channel();
+                        let handle = std::thread::spawn(move || {
+                            let mut reader = BufReader::new(read_handle);
+                            let mut line = String::new();
+                            loop {
+                                line.clear();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) => break, // EOF — mpv closed the pipe
+                                    Ok(_) => {
+                                        if tx.send(line.trim_end().to_string()).is_err() {
+                                            break; // receiver dropped
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        });
+                        self.pipe_reader_handle = Some(handle);
+                        self.pipe_rx = Some(rx);
+                    }
+
                     self.pipe = Some(file);
+
+                    // Batch all four setup commands into a single write,
+                    // same as connect_ipc() on Unix.
+                    self.send_command(
+                        "{ \"command\": [\"observe_property\", 1, \"media-title\"] }\n\
+                         { \"command\": [\"observe_property\", 2, \"audio-codec-name\"] }\n\
+                         { \"command\": [\"observe_property\", 3, \"audio-params/samplerate\"] }\n\
+                         { \"command\": [\"observe_property\", 4, \"audio-params/channel-count\"] }",
+                    );
                     return;
                 }
                 Err(_) => {
@@ -530,12 +528,9 @@ impl Player {
     pub fn poll(&mut self) {
         self.request_counter += 1;
 
-        #[cfg(windows)]
-        return;
-
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
-            // In fallback mode (no parec), poll audio-pts for activity detection
+            // In fallback mode (no real capture backend), poll audio-pts for activity detection
             if !self.has_real_audio() {
                 if self.request_counter % 3 == 0 {
                     self.send_command(
@@ -554,7 +549,12 @@ impl Player {
                 );
             }
 
+            #[cfg(unix)]
             if self.reader.is_none() {
+                return;
+            }
+            #[cfg(windows)]
+            if self.pipe_rx.is_none() {
                 return;
             }
 
@@ -563,12 +563,14 @@ impl Player {
             let mut stream_closed = false;
             let mut completed_lines: Vec<String> = Vec::new();
 
+            // On Unix, read directly off the non-blocking socket reader.
             // read_line() appends to self.line_buf rather than a fresh
             // local, and we only clear it once a full line (ending in
             // '\n') has actually arrived. If we hit WouldBlock partway
             // through a line, the bytes read so far stay in
             // self.line_buf and get completed on a later tick instead
             // of being thrown away.
+            #[cfg(unix)]
             {
                 let reader = self.reader.as_mut().unwrap();
                 loop {
@@ -598,8 +600,28 @@ impl Player {
                 }
             }
 
+            // On Windows, a background thread already did the blocking
+            // read_line() work (see connect_pipe()) — here we just drain
+            // the completed lines it's produced so far.
+            #[cfg(windows)]
+            {
+                while let Ok(line) = self.pipe_rx.as_ref().unwrap().try_recv() {
+                    completed_lines.push(line);
+                }
+                // If the reader thread has exited, mpv closed the pipe
+                // (or the read errored) and nothing more is coming.
+                if self
+                    .pipe_reader_handle
+                    .as_ref()
+                    .map(|h| h.is_finished())
+                    .unwrap_or(false)
+                {
+                    stream_closed = true;
+                }
+            }
+
             for text in &completed_lines {
-                if let Some(title) = Self::extract_media_title(text) {
+                if let Some(title) = mpv_ipc::extract_media_title(text) {
                     if !title.is_empty() {
                         new_title = Some(title);
                     }
@@ -611,13 +633,24 @@ impl Player {
                     }
                 }
 
-                self.parse_stream_info(text);
+                mpv_ipc::parse_stream_info(&mut self.stream_info, text);
             }
 
             if stream_closed {
-                self.stream = None;
-                self.reader = None;
-                self.line_buf.clear();
+                #[cfg(unix)]
+                {
+                    self.stream = None;
+                    self.reader = None;
+                    self.line_buf.clear();
+                }
+                #[cfg(windows)]
+                {
+                    self.pipe = None;
+                    self.pipe_rx = None;
+                    if let Some(handle) = self.pipe_reader_handle.take() {
+                        let _ = handle.join();
+                    }
+                }
             }
 
             if let Some(title) = new_title {
@@ -628,96 +661,6 @@ impl Player {
                 self.audio_level = 0.7;
             }
         }
-    }
-
-    #[cfg(unix)]
-    fn parse_stream_info(&mut self, text: &str) {
-        if text.contains("\"request_id\":200") || text.contains("\"request_id\": 200") {
-            if let Some(val) = Self::extract_number(text) {
-                self.stream_info.audio_bitrate = val;
-            }
-        }
-        if text.contains("\"request_id\":201") || text.contains("\"request_id\": 201") {
-            if let Some(val) = Self::extract_number(text) {
-                self.stream_info.cache_duration = val;
-            }
-        }
-        if text.contains("\"id\":2") || text.contains("\"id\": 2") {
-            if let Some(val) = Self::extract_string_value(text) {
-                self.stream_info.audio_codec = val;
-            }
-        }
-        if text.contains("\"id\":3") || text.contains("\"id\": 3") {
-            if let Some(val) = Self::extract_number(text) {
-                self.stream_info.sample_rate = val as u32;
-            }
-        }
-        if text.contains("\"id\":4") || text.contains("\"id\": 4") {
-            if let Some(val) = Self::extract_number(text) {
-                self.stream_info.channels = val as u32;
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    fn extract_number(json: &str) -> Option<f64> {
-        let data_key = "\"data\":";
-        let idx = json.find(data_key)?;
-        let after = json[idx + data_key.len()..].trim_start();
-        let num_str: String = after
-            .chars()
-            .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
-            .collect();
-        num_str.parse::<f64>().ok()
-    }
-
-    #[cfg(unix)]
-    fn extract_string_value(json: &str) -> Option<String> {
-        let data_key = "\"data\":";
-        let idx = json.find(data_key)?;
-        let after = json[idx + data_key.len()..].trim_start();
-        if after.starts_with('"') {
-            let rest = &after[1..];
-            let end = rest.find('"')?;
-            Some(rest[..end].to_string())
-        } else {
-            None
-        }
-    }
-
-    #[cfg(unix)]
-    fn extract_media_title(json_line: &str) -> Option<String> {
-        if !json_line.contains("media-title") {
-            return None;
-        }
-
-        let data_key = "\"data\":";
-        let idx = json_line.find(data_key)?;
-        let after = &json_line[idx + data_key.len()..];
-        let trimmed = after.trim_start();
-
-        if trimmed.starts_with('"') {
-            let rest = &trimmed[1..];
-            let mut result = String::new();
-            let mut chars = rest.chars();
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '"' => return Some(result),
-                    '\\' => {
-                        if let Some(escaped) = chars.next() {
-                            match escaped {
-                                '"' => result.push('"'),
-                                '\\' => result.push('\\'),
-                                'n' => result.push(' '),
-                                _ => result.push(escaped),
-                            }
-                        }
-                    }
-                    _ => result.push(ch),
-                }
-            }
-        }
-        None
     }
 
     pub fn stop(&mut self) {
@@ -736,10 +679,31 @@ impl Player {
         // Stop audio capture first
         self.stop_capture();
 
-        // Then stop mpv
+        // Then stop mpv. On Windows this must happen before we join the
+        // pipe reader thread below: that thread blocks on a synchronous
+        // read until mpv closes its end of the pipe (EOF), so joining it
+        // first would hang.
         if let Some(mut child) = self.process.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+
+        #[cfg(windows)]
+        {
+            self.pipe_rx = None;
+            if let Some(handle) = self.pipe_reader_handle.take() {
+                let start = std::time::Instant::now();
+                loop {
+                    if handle.is_finished() {
+                        let _ = handle.join();
+                        break;
+                    }
+                    if start.elapsed() > std::time::Duration::from_millis(300) {
+                        break; // Don't block shutdown
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
         }
 
         let _ = std::fs::remove_file(&self.socket_path);
