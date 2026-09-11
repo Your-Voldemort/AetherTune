@@ -4,7 +4,7 @@ A terminal-based internet radio player with real-time audio visualization, built
 
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
-[![Release](https://github.com/nevermore23274/AetherTune/actions/workflows/release.yml/badge.svg)](https://github.com/nevermore23274/AetherTune/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/nevermore23274/AetherTune)](https://github.com/nevermore23274/AetherTune/releases)
 [![AUR](https://img.shields.io/aur/version/aethertune-bin)](https://aur.archlinux.org/packages/aethertune-bin)
 [![PPA](https://img.shields.io/badge/PPA-patchgoblin%2Faethertune-orange)](https://launchpad.net/~patchgoblin/+archive/ubuntu/aethertune)
 [![Homebrew](https://img.shields.io/badge/brew-nevermore23274%2Faethertune-yellow)](https://github.com/nevermore23274/homebrew-aethertune)
