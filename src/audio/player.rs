@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(windows, target_os = "macos"))]
 use std::sync::Arc;
 
-#[cfg(windows)]
+#[cfg(any(unix, windows))]
 use std::sync::mpsc;
 
 use crate::audio::mpv_ipc::{self, StreamInfo};
@@ -67,6 +67,22 @@ pub struct Player {
     /// Receiving end of that channel; poll() drains it non-blockingly.
     #[cfg(windows)]
     pipe_rx: Option<mpsc::Receiver<String>>,
+    /// Bumped every time stop()/play_url() tears down the current stream.
+    /// A background connect thread (see connect_ipc()/connect_pipe())
+    /// tags the generation it was started for, so if it finishes after
+    /// a newer play_url() call has already superseded it, poll() can
+    /// recognize the result as stale and discard it instead of wiring a
+    /// dead connection's handles into a live session.
+    ipc_generation: u64,
+    /// Unix: result of an in-progress connect_ipc() background attempt,
+    /// drained non-blockingly by poll().
+    #[cfg(unix)]
+    ipc_connect_rx: Option<mpsc::Receiver<(u64, UnixStream, BufReader<UnixStream>)>>,
+    /// Windows: result of an in-progress connect_pipe() background
+    /// attempt, drained non-blockingly by poll().
+    #[cfg(windows)]
+    ipc_connect_rx:
+        Option<mpsc::Receiver<(u64, std::fs::File, std::thread::JoinHandle<()>, mpsc::Receiver<String>)>>,
     socket_path: PathBuf,
     /// IPC stream to mpv (Unix socket on Linux and macOS) — used for writing commands
     #[cfg(unix)]
@@ -144,6 +160,11 @@ impl Player {
             pipe_reader_handle: None,
             #[cfg(windows)]
             pipe_rx: None,
+            ipc_generation: 0,
+            #[cfg(unix)]
+            ipc_connect_rx: None,
+            #[cfg(windows)]
+            ipc_connect_rx: None,
             socket_path,
             #[cfg(unix)]
             stream: None,
@@ -215,10 +236,8 @@ impl Player {
 
                 #[cfg(unix)]
                 {
-                    // connect_ipc() now polls at a short interval starting
-                    // immediately, so we connect as soon as mpv actually
-                    // creates the socket instead of always eating a flat
-                    // 400ms up front regardless of how fast that happens.
+                    // connect_ipc() kicks off a background connect and
+                    // returns immediately — see its doc comment for why.
                     self.connect_ipc();
 
                     // Start audio capture for visualization if a capture
@@ -234,9 +253,10 @@ impl Player {
                     }
                 }
 
-                // On Windows, connect to mpv's named-pipe IPC (so volume
-                // control and title/stream-info polling reach mpv), then
-                // start WASAPI loopback capture if visualizer is enabled
+                // On Windows, kick off a background connect to mpv's
+                // named-pipe IPC (connect_pipe() returns immediately —
+                // see its doc comment for why), then start WASAPI
+                // loopback capture if visualizer is enabled
                 #[cfg(windows)]
                 {
                     self.connect_pipe();
@@ -397,45 +417,47 @@ impl Player {
         self.start_capture();
     }
 
+    /// Kick off a background connect to the socket mpv creates for
+    /// --input-ipc-server. This used to connect synchronously on the
+    /// caller's thread with a blocking retry loop — harmless on Unix,
+    /// where mpv typically creates the socket in well under 100ms, but
+    /// the exact same pattern on Windows (see connect_pipe()) could
+    /// freeze the whole app for up to 1.5s on every station change, and
+    /// worse if mpv took longer than that to create the pipe. Since
+    /// play_url() runs on the same thread as input handling and
+    /// rendering (see main.rs's event loop), *any* blocking call here
+    /// is a UI freeze — so connecting now happens entirely off that
+    /// thread, and poll() picks up the result non-blockingly once ready.
     #[cfg(unix)]
     fn connect_ipc(&mut self) {
-        // Poll frequently rather than in coarse steps, so we connect the
-        // moment mpv actually creates the socket instead of being capped
-        // by the retry interval. ~30 attempts * 50ms = 1.5s worst-case
-        // wait if mpv is unusually slow to start (similar ceiling to the
-        // old 400ms-sleep + 5*200ms-retry scheme), but typical startups
-        // — mpv usually creates the socket well under 100ms in — connect
-        // almost immediately instead of always eating the old flat delay.
-        for _ in 0..30 {
-            match UnixStream::connect(&self.socket_path) {
-                Ok(stream) => {
-                    stream.set_nonblocking(true).ok();
-                    stream
-                        .set_read_timeout(Some(std::time::Duration::from_millis(5)))
-                        .ok();
+        let generation = self.ipc_generation;
+        let socket_path = self.socket_path.clone();
+        let (tx, rx) = mpsc::channel();
 
-                    // Clone once here (not per-tick) so writes go through
-                    // `stream` and reads go through a persistent BufReader
-                    // over the clone — the buffer survives across polls
-                    // instead of being thrown away every tick.
-                    self.reader = stream.try_clone().ok().map(BufReader::new);
-                    self.stream = Some(stream);
-
-                    // Batch all four setup commands into a single write —
-                    // one syscall instead of four on every connect.
-                    self.send_command(
-                        "{ \"command\": [\"observe_property\", 1, \"media-title\"] }\n\
-                         { \"command\": [\"observe_property\", 2, \"audio-codec-name\"] }\n\
-                         { \"command\": [\"observe_property\", 3, \"audio-params/samplerate\"] }\n\
-                         { \"command\": [\"observe_property\", 4, \"audio-params/channel-count\"] }",
-                    );
-                    return;
-                }
-                Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+        // Retry for longer than the old synchronous version could afford
+        // to — up to 100 * 50ms = 5s — since a slow-to-start mpv no
+        // longer costs the user a frozen UI while we wait.
+        std::thread::spawn(move || {
+            for _ in 0..100 {
+                match UnixStream::connect(&socket_path) {
+                    Ok(stream) => {
+                        stream.set_nonblocking(true).ok();
+                        stream
+                            .set_read_timeout(Some(std::time::Duration::from_millis(5)))
+                            .ok();
+                        if let Some(reader) = stream.try_clone().ok().map(BufReader::new) {
+                            let _ = tx.send((generation, stream, reader));
+                        }
+                        return;
+                    }
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                 }
             }
-        }
+        });
+
+        self.ipc_connect_rx = Some(rx);
     }
 
     #[cfg(unix)]
@@ -448,63 +470,69 @@ impl Player {
         }
     }
 
-    /// Connect to the named pipe mpv creates for --input-ipc-server. mpv
-    /// creates the pipe server asynchronously after startup, so — same as
-    /// connect_ipc() on Unix — retry briefly rather than assuming it's
-    /// ready immediately. ERROR_FILE_NOT_FOUND / ERROR_PIPE_BUSY show up
-    /// as an Err here before the server side exists yet.
+    /// Kick off a background connect to the named pipe mpv creates for
+    /// --input-ipc-server. mpv creates the pipe server asynchronously
+    /// after startup, and named-pipe creation on Windows can apparently
+    /// take noticeably longer — and less reliably — than Unix socket
+    /// creation in the wild. This used to retry synchronously on the
+    /// caller's thread (play_url(), which runs on the same thread as
+    /// input handling and rendering — see main.rs's event loop), so a
+    /// slow-to-appear pipe froze the entire app for up to 1.5s on every
+    /// station change, and left volume control permanently broken for
+    /// that session if it took longer than that. Connecting now happens
+    /// entirely off that thread; poll() picks up the result non-blockingly
+    /// once ready.
     #[cfg(windows)]
     fn connect_pipe(&mut self) {
         use std::fs::OpenOptions;
 
-        for _ in 0..30 {
-            match OpenOptions::new().read(true).write(true).open(&self.pipe_name) {
-                Ok(file) => {
-                    // Named pipes have no non-blocking read without
-                    // overlapped I/O, so a background thread does a
-                    // blocking read_line() loop over its own cloned
-                    // handle and forwards completed lines through a
-                    // channel; poll() drains that channel non-blockingly,
-                    // same shape as the Unix socket path.
-                    if let Ok(read_handle) = file.try_clone() {
-                        let (tx, rx) = mpsc::channel();
-                        let handle = std::thread::spawn(move || {
-                            let mut reader = BufReader::new(read_handle);
-                            let mut line = String::new();
-                            loop {
-                                line.clear();
-                                match reader.read_line(&mut line) {
-                                    Ok(0) => break, // EOF — mpv closed the pipe
-                                    Ok(_) => {
-                                        if tx.send(line.trim_end().to_string()).is_err() {
-                                            break; // receiver dropped
+        let generation = self.ipc_generation;
+        let pipe_name = self.pipe_name.clone();
+        let (tx, rx) = mpsc::channel();
+
+        // Retry for longer than the old synchronous version could afford
+        // to — up to 100 * 50ms = 5s — since a slow-to-appear pipe no
+        // longer costs the user a frozen UI while we wait.
+        std::thread::spawn(move || {
+            for _ in 0..100 {
+                match OpenOptions::new().read(true).write(true).open(&pipe_name) {
+                    Ok(file) => {
+                        // Named pipes have no non-blocking read without
+                        // overlapped I/O, so a background thread does a
+                        // blocking read_line() loop over its own cloned
+                        // handle and forwards completed lines through a
+                        // channel; poll() drains that channel non-blockingly,
+                        // same shape as the Unix socket path.
+                        if let Ok(read_handle) = file.try_clone() {
+                            let (line_tx, line_rx) = mpsc::channel();
+                            let reader_handle = std::thread::spawn(move || {
+                                let mut reader = BufReader::new(read_handle);
+                                let mut line = String::new();
+                                loop {
+                                    line.clear();
+                                    match reader.read_line(&mut line) {
+                                        Ok(0) => break, // EOF — mpv closed the pipe
+                                        Ok(_) => {
+                                            if line_tx.send(line.trim_end().to_string()).is_err() {
+                                                break; // receiver dropped
+                                            }
                                         }
+                                        Err(_) => break,
                                     }
-                                    Err(_) => break,
                                 }
-                            }
-                        });
-                        self.pipe_reader_handle = Some(handle);
-                        self.pipe_rx = Some(rx);
+                            });
+                            let _ = tx.send((generation, file, reader_handle, line_rx));
+                        }
+                        return;
                     }
-
-                    self.pipe = Some(file);
-
-                    // Batch all four setup commands into a single write,
-                    // same as connect_ipc() on Unix.
-                    self.send_command(
-                        "{ \"command\": [\"observe_property\", 1, \"media-title\"] }\n\
-                         { \"command\": [\"observe_property\", 2, \"audio-codec-name\"] }\n\
-                         { \"command\": [\"observe_property\", 3, \"audio-params/samplerate\"] }\n\
-                         { \"command\": [\"observe_property\", 4, \"audio-params/channel-count\"] }",
-                    );
-                    return;
-                }
-                Err(_) => {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    Err(_) => {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
                 }
             }
-        }
+        });
+
+        self.ipc_connect_rx = Some(rx);
     }
 
     #[cfg(windows)]
@@ -530,6 +558,67 @@ impl Player {
 
         #[cfg(any(unix, windows))]
         {
+            // Pick up a background connect_ipc()/connect_pipe() result if
+            // one has arrived. If the generation doesn't match, a newer
+            // play_url() call has already superseded this attempt (e.g.
+            // the user switched stations again before it finished) —
+            // discard it rather than wiring a dead connection into a
+            // live session.
+            #[cfg(unix)]
+            {
+                if let Some(rx) = self.ipc_connect_rx.take() {
+                    match rx.try_recv() {
+                        Ok((generation, stream, reader)) => {
+                            if generation == self.ipc_generation {
+                                self.stream = Some(stream);
+                                self.reader = Some(reader);
+                                self.send_command(
+                                    "{ \"command\": [\"observe_property\", 1, \"media-title\"] }\n\
+                                     { \"command\": [\"observe_property\", 2, \"audio-codec-name\"] }\n\
+                                     { \"command\": [\"observe_property\", 3, \"audio-params/samplerate\"] }\n\
+                                     { \"command\": [\"observe_property\", 4, \"audio-params/channel-count\"] }",
+                                );
+                            }
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {
+                            self.ipc_connect_rx = Some(rx);
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            // Connector thread gave up — mpv never created
+                            // the socket within the retry budget.
+                        }
+                    }
+                }
+            }
+
+            #[cfg(windows)]
+            {
+                if let Some(rx) = self.ipc_connect_rx.take() {
+                    match rx.try_recv() {
+                        Ok((generation, file, reader_handle, line_rx)) => {
+                            if generation == self.ipc_generation {
+                                self.pipe = Some(file);
+                                self.pipe_reader_handle = Some(reader_handle);
+                                self.pipe_rx = Some(line_rx);
+                                self.send_command(
+                                    "{ \"command\": [\"observe_property\", 1, \"media-title\"] }\n\
+                                     { \"command\": [\"observe_property\", 2, \"audio-codec-name\"] }\n\
+                                     { \"command\": [\"observe_property\", 3, \"audio-params/samplerate\"] }\n\
+                                     { \"command\": [\"observe_property\", 4, \"audio-params/channel-count\"] }",
+                                );
+                            }
+                        }
+                        Err(mpsc::TryRecvError::Empty) => {
+                            self.ipc_connect_rx = Some(rx);
+                        }
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            // Connector thread gave up — mpv never created
+                            // the pipe within the retry budget.
+                        }
+                    }
+                }
+            }
+
             // In fallback mode (no real capture backend), poll audio-pts for activity detection
             if !self.has_real_audio() {
                 if self.request_counter % 3 == 0 {
@@ -664,16 +753,24 @@ impl Player {
     }
 
     pub fn stop(&mut self) {
+        // Bump first: any connect_ipc()/connect_pipe() background attempt
+        // still in flight is tagged with the old generation, so poll()
+        // will recognize and discard its result as stale even if it
+        // arrives after this call returns.
+        self.ipc_generation = self.ipc_generation.wrapping_add(1);
+
         #[cfg(unix)]
         {
             self.stream = None;
             self.reader = None;
             self.line_buf.clear();
+            self.ipc_connect_rx = None;
         }
 
         #[cfg(windows)]
         {
             self.pipe = None;
+            self.ipc_connect_rx = None;
         }
 
         // Stop audio capture first
